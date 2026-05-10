@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# claude-sandbox installer entry point. Pipe-ready:
+#   curl -fsSL https://raw.githubusercontent.com/gilesknap/claude-sandbox2/main/install | bash
+#
+# This script is a thin probe-and-bootstrap shim. It establishes the
+# preconditions that the Python orchestrator (src/claude_sandbox/cli.py)
+# cannot establish for itself — git, the source clone, and uv — and
+# then re-execs into the orchestrator. Everything substantive happens
+# Python-side.
+
+set -euo pipefail
+
+SRC_REPO="${CLAUDE_SANDBOX_REPO:-https://github.com/gilesknap/claude-sandbox2.git}"
+SRC_REF="${CLAUDE_SANDBOX_REF:-main}"
+SRC_DIR="${CLAUDE_SANDBOX_SRC_DIR:-/opt/claude-sandbox-src}"
+
+# v1 targets root-in-devcontainer; refuse cleanly on non-root rather
+# than producing a confusing apt-get permission failure.
+if [ "$(id -u)" -ne 0 ]; then
+    echo "claude-sandbox: refusing — v1 requires running as root inside a devcontainer (rootless podman + remoteUser=root). Non-root host install is tracked as a v2 follow-up." >&2
+    exit 1
+fi
+
+if ! command -v apt-get >/dev/null 2>&1; then
+    echo "claude-sandbox: refusing — claude-sandbox v1 supports Debian/Ubuntu only (no apt-get on PATH). File an issue at gilesknap/claude-sandbox2 to request your distro." >&2
+    exit 1
+fi
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+# Bootstrap minimum for the clone + curl-installs; the orchestrator's
+# probe re-asserts everything before mutating workspace state.
+apt-get install -y -qq --no-install-recommends \
+    bubblewrap nodejs gh ca-certificates curl jq git
+
+# Install uv if absent. uv hosts the project venv at $SRC_DIR/.venv and
+# runs the typer CLI; depending on the system Python's pip/venv would
+# tie us to whatever Python the base image ships.
+if ! command -v uv >/dev/null 2>&1; then
+    curl -fsSL https://astral.sh/uv/install.sh | sh
+    # uv installer drops the binary at ~/.local/bin/uv; make it visible
+    # to the rest of this script.
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
+# glab is best-effort in slice 1 — a flaky GitLab release endpoint must
+# not gate the install. Slice 2 polishes (arch / version pinning).
+if ! command -v glab >/dev/null 2>&1; then
+    arch=""
+    case "$(uname -m)" in
+        x86_64)  arch=x86_64 ;;
+        aarch64) arch=arm64 ;;
+    esac
+    if [ -n "$arch" ]; then
+        ver="$(curl -fsSL 'https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/releases?per_page=1' \
+            | grep -oE '"tag_name":"v[^"]+"' | head -1 | sed -E 's/.*"v([^"]+)".*/\1/')" || ver=""
+        if [ -n "$ver" ]; then
+            tmp="$(mktemp -d)"
+            if curl -fsSL -o "$tmp/glab.tar.gz" \
+                "https://gitlab.com/gitlab-org/cli/-/releases/v${ver}/downloads/glab_${ver}_linux_${arch}.tar.gz"; then
+                tar -xzf "$tmp/glab.tar.gz" -C "$tmp"
+                install -m 0755 "$tmp/bin/glab" /usr/local/bin/glab
+            else
+                echo "claude-sandbox: glab — release download failed; skipping (slice 2 polishes)." >&2
+            fi
+            rm -rf "$tmp"
+        else
+            echo "claude-sandbox: glab — could not resolve latest version; skipping (slice 2 polishes)." >&2
+        fi
+    fi
+fi
+
+# Real Claude binary. Anthropic's installer drops it at ~/.local/bin/claude;
+# the orchestrator moves it to /opt/claude/bin/claude so the shadow on
+# $PATH always wins.
+if [ ! -x /opt/claude/bin/claude ] && ! command -v claude >/dev/null 2>&1; then
+    curl -fsSL https://claude.ai/install.sh | bash
+fi
+
+install -d "$(dirname "$SRC_DIR")"
+if [ -d "$SRC_DIR/.git" ]; then
+    git -C "$SRC_DIR" fetch --quiet origin "$SRC_REF"
+    git -C "$SRC_DIR" checkout --quiet "$SRC_REF"
+    git -C "$SRC_DIR" reset --hard --quiet "origin/$SRC_REF"
+else
+    rm -rf "$SRC_DIR"
+    git clone --quiet --branch "$SRC_REF" "$SRC_REPO" "$SRC_DIR"
+fi
+
+cd "$SRC_DIR"
+uv sync --quiet
+exec uv run claude-sandbox install "$@"

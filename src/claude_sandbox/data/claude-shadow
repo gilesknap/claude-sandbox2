@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Shadow `claude` binary. Wraps the real Claude in a bwrap sandbox so
+# that `claude` on the user's $PATH always runs sandboxed.
+#
+# The three template defaults below (@@REAL_CLAUDE@@, @@SRC_DIR@@,
+# @@GITCONFIG_PATH@@) are substituted by the installer at install time.
+# Setting the corresponding CLAUDE_SANDBOX_* env vars at runtime still
+# overrides.
+#
+# Recursion guard: if IS_SANDBOX=1 is already set we are inside the
+# sandbox (e.g. a hook or skill spawned `claude`), so fall through to
+# the real binary directly. Internal claude-spawns-claude does not
+# double-wrap.
+
+set -euo pipefail
+
+REAL_CLAUDE="${CLAUDE_SANDBOX_REAL_CLAUDE:-@@REAL_CLAUDE@@}"
+
+if [ "${IS_SANDBOX:-}" = "1" ]; then
+    exec "$REAL_CLAUDE" "$@"
+fi
+
+export CLAUDE_SANDBOX_GITCONFIG_PATH="${CLAUDE_SANDBOX_GITCONFIG_PATH:-@@GITCONFIG_PATH@@}"
+
+SRC_DIR="${CLAUDE_SANDBOX_SRC_DIR:-@@SRC_DIR@@}"
+# shellcheck source=bwrap_argv.sh
+source "$SRC_DIR/src/claude_sandbox/data/bwrap_argv.sh"
+
+mapfile -t ARGV < <(bwrap_argv_build "$PWD" "$REAL_CLAUDE" "$@")
+exec "${ARGV[@]}"
