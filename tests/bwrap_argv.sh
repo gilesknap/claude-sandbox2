@@ -107,6 +107,11 @@ ARGV3a="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
 set -e
 assert_contains scenario3a "$ARGV3a" "$TMPHOME/.claude"
 assert_not_contains scenario3a "$ARGV3a" "$TMPHOME/.cache"
+# Neither credential dir exists in this fresh tmphome; both binds
+# must be absent so a missing host directory cannot cause a launch
+# failure.
+assert_not_contains scenario3a "$ARGV3a" "$TMPHOME/.config/gh"
+assert_not_contains scenario3a "$ARGV3a" "$TMPHOME/.config/glab-cli"
 
 mkdir -p "$TMPHOME/.cache"
 set +e
@@ -115,6 +120,23 @@ ARGV3b="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
 set -e
 assert_contains scenario3b "$ARGV3b" "$TMPHOME/.claude"
 assert_contains scenario3b "$ARGV3b" "$TMPHOME/.cache"
+
+# --- Scenario 3c: gh and glab credential dirs both present ---
+mkdir -p "$TMPHOME/.config/gh" "$TMPHOME/.config/glab-cli"
+set +e
+ARGV3c="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
+    bwrap_argv_build "$TMPHOME" /opt/claude/bin/claude)"
+set -e
+assert_contains scenario3c "$ARGV3c" "$TMPHOME/.config/gh"
+assert_contains scenario3c "$ARGV3c" "$TMPHOME/.config/glab-cli"
+# A sibling under .config (e.g. VS Code) must NOT be bound even when
+# the directory exists — only the explicit allowlist is exposed.
+mkdir -p "$TMPHOME/.config/Code"
+set +e
+ARGV3d="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
+    bwrap_argv_build "$TMPHOME" /opt/claude/bin/claude)"
+set -e
+assert_not_contains scenario3d "$ARGV3d" "$TMPHOME/.config/Code"
 
 # --- Scenario 4: CLAUDE_SANDBOX_FRESH_PROC=0 swaps --proc for --ro-bind /proc ---
 # Triggered by the shadow's launch-time probe when seccomp blocks

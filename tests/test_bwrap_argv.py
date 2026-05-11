@@ -18,16 +18,21 @@ def _run_builder(
     workspace: str = "/tmp",
     real_claude: str = "/opt/claude/bin/claude",
     fresh_proc: str | None = None,
+    home: str | None = None,
 ) -> str:
     """Source bwrap_argv.sh and emit the argv for (workspace, real_claude).
 
     `fresh_proc` sets `CLAUDE_SANDBOX_FRESH_PROC` before invoking the
     builder, so callers can exercise both the secure default (fresh
     procfs) and the degraded bind-/proc fallback in one helper.
+    `home` overrides `$HOME` for tests that need to stage credential
+    dirs under a temporary home.
     """
     env_prefix = ""
     if fresh_proc is not None:
-        env_prefix = f"export CLAUDE_SANDBOX_FRESH_PROC={fresh_proc}\n"
+        env_prefix += f"export CLAUDE_SANDBOX_FRESH_PROC={fresh_proc}\n"
+    if home is not None:
+        env_prefix += f"export HOME={home}\n"
     script = (
         "set -eu\n"
         f"{env_prefix}"
@@ -124,3 +129,37 @@ def test_argv_ends_with_real_claude() -> None:
     # args land on Claude, not on bwrap.
     assert lines[-1] == "/opt/claude/bin/claude"
     assert "--" in lines
+
+
+def test_argv_binds_gh_and_glab_when_present(tmp_path) -> None:
+    """gh / glab credential dirs are re-bound through the strict-/root
+    inversion when they exist on the host. Without these binds the user's
+    forge tokens would be invisible inside the sandbox and `gh auth status`
+    would report "not authenticated".
+    """
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".config" / "gh").mkdir(parents=True)
+    (tmp_path / ".config" / "glab-cli").mkdir(parents=True)
+    argv = _run_builder(home=str(tmp_path))
+    assert f"{tmp_path}/.config/gh" in argv
+    assert f"{tmp_path}/.config/glab-cli" in argv
+
+
+def test_argv_omits_credential_binds_when_absent(tmp_path) -> None:
+    """When the host has no gh/glab config dirs, the binds must be
+    absent — otherwise bwrap would fail to launch on a fresh host."""
+    (tmp_path / ".claude").mkdir()
+    argv = _run_builder(home=str(tmp_path))
+    assert f"{tmp_path}/.config/gh" not in argv
+    assert f"{tmp_path}/.config/glab-cli" not in argv
+
+
+def test_argv_does_not_bind_arbitrary_config_subdirs(tmp_path) -> None:
+    """Siblings under ~/.config (VS Code, etc.) stay invisible — only
+    the explicit gh/glab-cli allowlist is exposed."""
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".config" / "Code").mkdir(parents=True)
+    (tmp_path / ".config" / "git-credential-vscode").mkdir(parents=True)
+    argv = _run_builder(home=str(tmp_path))
+    assert f"{tmp_path}/.config/Code" not in argv
+    assert f"{tmp_path}/.config/git-credential-vscode" not in argv

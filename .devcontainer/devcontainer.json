@@ -37,6 +37,14 @@
         // across rebuilds. Workspace-level .claude/ in this repo is a
         // separate thing — committed to git — and lives at
         // /workspaces/claude-sandbox2/.claude/.
+        //
+        // gh / glab tokens are deliberately NOT mounted from the host.
+        // They live inside the container filesystem at
+        // /root/.config/{gh,glab-cli} — acquired by running `gh auth
+        // login` / `glab auth login` once per container. The bwrap
+        // shadow still selectively re-binds those two paths through
+        // the strict-under-/root inversion (see
+        // src/claude_sandbox/data/bwrap_argv.sh).
         {
             "source": "${localEnv:HOME}/.config/terminal-config/.claude",
             "target": "/root/.claude",

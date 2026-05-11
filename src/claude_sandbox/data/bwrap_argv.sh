@@ -78,6 +78,21 @@ bwrap_argv_build() {
         argv+=( --bind "$home/.cache" "$home/.cache" )
     fi
 
+    # Selective credential exposure: gh (~/.config/gh) and glab
+    # (~/.config/glab-cli) are the only host credential paths the
+    # sandbox trusts. Everything else under $HOME — SSH keys, VS Code
+    # cred helpers, cloud SDK caches, etc. — stays masked by the
+    # strict-under-/root inversion. Keep this list narrow: every entry
+    # is a weakening of the inversion. bwrap auto-creates $home/.config
+    # as an empty tmpfs intermediate, so the sibling subdirs are not
+    # incidentally exposed.
+    local cred_subdir
+    for cred_subdir in .config/gh .config/glab-cli; do
+        if [ -d "$home/$cred_subdir" ]; then
+            argv+=( --bind "$home/$cred_subdir" "$home/$cred_subdir" )
+        fi
+    done
+
     if [ -n "$workspace" ] && [ -d "$workspace" ]; then
         argv+=( --bind "$workspace" "$workspace" )
     fi

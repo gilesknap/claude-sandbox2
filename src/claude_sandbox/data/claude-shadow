@@ -45,6 +45,13 @@ if [ -z "${CLAUDE_SANDBOX_FRESH_PROC:-}" ]; then
     fi
 fi
 
+# Ensure the credential dirs the bwrap argv builder selectively re-binds
+# (gh, glab) exist before launch. Without this, `gh auth login` run from
+# inside the sandbox before a token is provisioned writes into the
+# in-sandbox tmpfs and the credential vanishes when bwrap exits. mkdir
+# is sub-ms and idempotent; the dirs persist in the container fs.
+mkdir -p "${HOME:-/root}/.config/gh" "${HOME:-/root}/.config/glab-cli"
+
 # shellcheck source=bwrap_argv.sh
 source "$SRC_DIR/src/claude_sandbox/data/bwrap_argv.sh"
 
