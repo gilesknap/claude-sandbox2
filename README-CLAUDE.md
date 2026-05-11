@@ -85,10 +85,9 @@ to verify them all).
 | VS Code IPC bridges masked | `--tmpfs /tmp` | check 11 |
 | User runtime dir masked | `--tmpfs /run/user` | check 12 |
 | Docker/Compose secrets masked | `--tmpfs /run/secrets` | check 13 |
-| `.gitconfig` defence in depth | `--bind-try /dev/null /root/.gitconfig` | check 14 |
-| `.netrc` defence in depth | `--bind-try /dev/null /root/.netrc` | check 15 |
-| `.Xauthority` defence in depth | `--bind-try /dev/null /root/.Xauthority` | check 16 |
-| Curated gitconfig in effect | `GIT_CONFIG_GLOBAL=/etc/claude-gitconfig` | check 17 |
+| `.netrc` defence in depth | `--bind-try /dev/null /root/.netrc` | check 14 |
+| `.Xauthority` defence in depth | `--bind-try /dev/null /root/.Xauthority` | check 15 |
+| Curated gitconfig in effect | `GIT_CONFIG_GLOBAL=/etc/claude-gitconfig`, `GIT_CONFIG_SYSTEM=/dev/null` | check 16 |
 
 Network egress (`--share-net`, NOT unshared) is deliberately open so
 Claude can reach `api.anthropic.com`. It has no PASS/FAIL check —
@@ -141,8 +140,19 @@ Claude. The deliberate exposures are:
   Claude — see the visibility caveat below.
 - **`/etc/claude-gitconfig`** (read). The curated gitconfig
   regenerated at every `install` with your host's current
-  `user.name` / `user.email` and a `gh` credential helper for
-  `https://github.com`.
+  `user.name` / `user.email`, `gh` / `glab` credential helpers for
+  `https://github.com` and `https://gitlab.diamond.ac.uk`, and
+  ssh→https `insteadOf` rewrites for both hosts so SSH-shaped clone
+  URLs work without an SSH agent inside the sandbox.
+- **`/etc/gitconfig`** (read, via `--ro-bind / /`). The host's system
+  gitconfig is reachable read-only but neutralised for `git` because
+  `GIT_CONFIG_SYSTEM=/dev/null` is set inside the sandbox. Tools that
+  scrub `GIT_*` env vars before spawning git (e.g. pre-commit's
+  `no_git_env`) will see it, which is the intended behaviour — the
+  defence-in-depth bind-mask we previously layered here broke those
+  tools without adding meaningful protection beyond the env redirect.
+  The host's `/root/.gitconfig` is invisible via strict-under-/root,
+  so there is no comparable concern at $HOME.
 - **`/root/.claude/`** (read/write). Claude's own state, settings,
   skills, and hooks.
 - **`/root/.claude.json`** (read/write). Claude Code's account-level
@@ -209,7 +219,7 @@ From inside Claude, run:
 /verify-sandbox
 ```
 
-The command runs 17 PASS/FAIL checks against the live process and
+The command runs 16 PASS/FAIL checks against the live process and
 prints a summary table. Any FAIL exits the command non-zero (so
 you can use it as a CI assertion), and the FAIL line names which
 defence regressed.

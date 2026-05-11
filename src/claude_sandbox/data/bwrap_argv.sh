@@ -133,19 +133,46 @@ bwrap_argv_build() {
     # Defence-in-depth file masks. Strict-under-/root already hides the
     # dotfiles under $HOME, but masking them with /dev/null is free,
     # explicit, and survives if the strict-root bind ever regresses.
-    # /etc/gitconfig, /etc/shadow, and /etc/sudoers live outside the
-    # inversion and are masked unconditionally. /etc/shadow leaks the
+    # /etc/shadow, /etc/gshadow, and /etc/sudoers live outside the
+    # inversion and are masked when present. /etc/shadow leaks the
     # host user list (and password hashes on hosts where users have
     # passwords); /etc/sudoers leaks the sudo policy. Both are
     # information-disclosure rather than credential exfil under
-    # cap-drop ALL + NO_NEW_PRIVS, but masking is free. --bind-try
-    # keeps the argv valid on hosts where the source path doesn't
-    # exist.
+    # cap-drop ALL + NO_NEW_PRIVS, but masking is free.
+    #
+    # Gitconfigs are deliberately NOT masked. The host's
+    # /root/.gitconfig is already invisible via strict-under-/root,
+    # and host /etc/gitconfig is neutralised by the env redirect that
+    # follows (GIT_CONFIG_GLOBAL=/etc/claude-gitconfig,
+    # GIT_CONFIG_SYSTEM=/dev/null). The bind-mask we previously layered
+    # on top broke tools like pre-commit that scrub GIT_* env before
+    # spawning a child `git init` (pre_commit/git.py::no_git_env): with
+    # the env redirect gone, the child git fell back to reading the
+    # masked /etc/gitconfig and on EL9 + SELinux that returned EACCES
+    # instead of empty content, aborting every hook.
+    #
+    # $HOME masks always emit: $home is on tmpfs so bwrap can create
+    # the destination mount point, and --bind-try short-circuits when
+    # the source is absent.
+    #
+    # /etc masks are gated on the invoking user being able to *read*
+    # the host file:
+    #   - if the user can't read it (e.g. /etc/shadow mode 0000, or
+    #     /etc/sudoers mode 0440 for a non-root invoker), there is no
+    #     leak to mask — Claude inside the sandbox runs as the same
+    #     real UID under the user namespace and cannot read it either.
+    #   - bwrap setting up a bind on /etc/<file> under a --ro-bind / /
+    #     fails on these hosts (the destination resolution in the new
+    #     namespace dies with EROFS even though the host file exists),
+    #     so emitting the mask unconditionally aborts every launch.
     local mask
-    for mask in "$home/.gitconfig" /etc/gitconfig "$home/.netrc" \
-                "$home/.Xauthority" "$home/.ICEauthority" \
-                /etc/shadow /etc/gshadow /etc/sudoers; do
+    for mask in "$home/.netrc" "$home/.Xauthority" "$home/.ICEauthority"; do
         argv+=( --bind-try /dev/null "$mask" )
+    done
+    for mask in /etc/shadow /etc/gshadow /etc/sudoers; do
+        if [ -r "$mask" ]; then
+            argv+=( --bind /dev/null "$mask" )
+        fi
     done
 
     argv+=(

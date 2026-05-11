@@ -76,6 +76,12 @@ else
 fi
 assert_contains scenario1 "$ARGV1" "IS_SANDBOX"
 assert_contains scenario1 "$ARGV1" "/etc/claude-gitconfig"
+# Gitconfigs are deliberately not bind-masked: the env redirect to
+# /etc/claude-gitconfig + strict-under-/root handle the threat, and a
+# bind to /dev/null over /etc/gitconfig broke pre-commit's sanitised
+# subprocesses on EL9 (SELinux made the bound /dev/null read as EACCES).
+assert_not_contains scenario1 "$ARGV1" "/root/.gitconfig"
+assert_not_contains scenario1 "$ARGV1" "/etc/gitconfig"
 assert_contains scenario1 "$ARGV1" "/test/.runtime/claude"
 # Default mode mounts a fresh procfs; the bind-/proc fallback is off.
 assert_contains scenario1 "$ARGV1" "--proc"

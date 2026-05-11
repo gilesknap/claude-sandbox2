@@ -108,6 +108,14 @@ cat > "$CLAUDE_SANDBOX_GITCONFIG_PATH" <<EOF
     email = $git_email
 [credential "https://github.com"]
     helper = !gh auth git-credential
+[credential "https://gitlab.diamond.ac.uk"]
+    helper = !glab auth git-credential
+[url "https://github.com/"]
+    insteadOf = git@github.com:
+    insteadOf = ssh://git@github.com/
+[url "https://gitlab.diamond.ac.uk/"]
+    insteadOf = git@gitlab.diamond.ac.uk:
+    insteadOf = ssh://git@gitlab.diamond.ac.uk/
 [init]
     defaultBranch = main
 [safe]
