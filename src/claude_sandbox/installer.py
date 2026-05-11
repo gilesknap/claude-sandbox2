@@ -29,6 +29,13 @@ SHADOW_CLAUDE_PATH = Path("/usr/local/bin/claude")
 SHADOW_CLI_PATH = Path("/usr/local/bin/claude-sandbox")
 GITCONFIG_PATH = Path("/etc/claude-gitconfig")
 
+# Shared cross-container .claude tree, bound in by the devcontainer at
+# /user-terminal-config (see .devcontainer/devcontainer.json). When this
+# subdir exists, `install` makes ~/.claude a symlink to it so skills /
+# settings / history persist across container rebuilds and are shared
+# across every devcontainer that mounts the same terminal-config dir.
+TERMINAL_CONFIG_CLAUDE = Path("/user-terminal-config/.claude")
+
 # The real Claude binary lives inside the clone tree at
 # <src_dir>/.runtime/claude (gitignored). Putting it under the clone
 # rather than /opt/ keeps the binary survivable across container
@@ -104,6 +111,7 @@ def install(
     place_shadow(src_dir)
     place_cli_shim(src_dir)
     write_gitconfig()
+    link_claude_to_terminal_config()
 
     # 5. Workspace-scoped artifacts. Idempotent: re-runs are no-ops on a
     # workspace already fully wired.
@@ -132,6 +140,10 @@ def _plan(workspace: Path, src_dir: Path) -> DryRunPlan:
         (real_claude_path(src_dir), "real claude (copied from ~/.local/bin)")
     )
     plan.container_files.append((GITCONFIG_PATH, "curated gitconfig"))
+    if TERMINAL_CONFIG_CLAUDE.is_dir():
+        plan.container_files.append(
+            (Path.home() / ".claude", f"symlink → {TERMINAL_CONFIG_CLAUDE}")
+        )
 
     plan.workspace_files.append(
         (workspace / ".claude" / "settings.json", "settings.json (merged)")
@@ -249,6 +261,50 @@ def place_cli_shim(src_dir: Path) -> None:
         f'exec uv run --project {src_dir} claude-sandbox "$@"\n'
     )
     _atomic_write(SHADOW_CLI_PATH, shim, mode=0o755)
+
+
+def link_claude_to_terminal_config(
+    target: Path = TERMINAL_CONFIG_CLAUDE,
+    link: Path | None = None,
+) -> None:
+    """Make ~/.claude a symlink to `/user-terminal-config/.claude` when present.
+
+    The devcontainer bind-mounts the host's
+    `~/.config/terminal-config` to `/user-terminal-config`, giving
+    every sibling devcontainer a shared persistent `.claude/` tree.
+    Pointing ~/.claude at that subdir means skills, settings, and
+    history survive container rebuilds and are shared with every
+    other workspace that mounts the same terminal-config dir.
+
+    Idempotent: a re-run is a no-op when the link is already correct.
+    Refuses to clobber a real `~/.claude` directory — that's user
+    state and overwriting it would lose work.
+
+    No-op (silent) when `/user-terminal-config/.claude` doesn't
+    exist; this keeps `claude-sandbox install` working on hosts
+    without the shared terminal-config mount.
+    """
+    if not target.is_dir():
+        return
+
+    link = link if link is not None else Path.home() / ".claude"
+
+    if link.is_symlink():
+        if link.resolve() == target.resolve():
+            return
+        raise SettingsConflictError(
+            f"refusing — {link} is a symlink to {link.resolve()}, not {target}. "
+            f"Reconcile manually if you want the shared terminal-config tree."
+        )
+    if link.exists():
+        raise SettingsConflictError(
+            f"refusing — {link} exists as a real directory. Reconcile by moving "
+            f"its contents into {target} (or backing them up) and removing "
+            f"{link}; then re-run `claude-sandbox install`."
+        )
+
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(target)
 
 
 def write_gitconfig(

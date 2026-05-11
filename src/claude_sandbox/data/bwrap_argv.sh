@@ -71,6 +71,14 @@ bwrap_argv_build() {
         --tmpfs "$home"
     )
 
+    # `$home/.claude` may be a real directory or a symlink to
+    # `/user-terminal-config/.claude` (the shared cross-container tree
+    # bound in by devcontainer.json; the installer sets up that symlink
+    # when the mount is present). Both forms work: `-d` follows the
+    # symlink and `--bind` resolves the source on the host fs, so the
+    # symlink target ends up bound writably at $home/.claude inside
+    # the sandbox. The symlink itself is shadowed by the tmpfs above
+    # — only the resolved content is visible to Claude.
     if [ -d "$home/.claude" ]; then
         argv+=( --bind "$home/.claude" "$home/.claude" )
     fi

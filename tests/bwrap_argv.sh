@@ -175,6 +175,26 @@ assert_contains scenario3f "$ARGV3f" "$TMPHOME/.local/bin/uvx"
 assert_contains scenario3f "$ARGV3f" \
     "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$TMPHOME/.local/bin"
 
+# --- Scenario 3g: ~/.claude is a symlink to the shared terminal-config tree ---
+# The installer points ~/.claude at /user-terminal-config/.claude when
+# the devcontainer mounts the shared dir. `[ -d ]` follows the symlink
+# and `--bind` resolves source paths on the host fs, so the bind argv
+# token is still ~/.claude — the symlink target is invisible at the
+# argv layer (bwrap dereferences it at mount time).
+TMPSHARED="$(mktemp -d)"
+trap 'rm -rf "$TMPHOME" "$TMPSHARED"' EXIT
+mkdir -p "$TMPSHARED/.claude-shared"
+rm -rf "$TMPHOME/.claude"
+ln -s "$TMPSHARED/.claude-shared" "$TMPHOME/.claude"
+set +e
+ARGV3g="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
+    bwrap_argv_build "$TMPHOME" /test/.runtime/claude)"
+set -e
+# The bind still emits ~/.claude as both source and destination —
+# bwrap follows the symlink at mount time, mounting the shared dir
+# writably at the destination inside the sandbox.
+assert_contains scenario3g "$ARGV3g" "$TMPHOME/.claude"
+
 # --- Scenario 4: CLAUDE_SANDBOX_FRESH_PROC=0 swaps --proc for --ro-bind /proc ---
 # Triggered by the shadow's launch-time probe when seccomp blocks
 # mount(proc) (typical of nested podman/docker on RHEL). The fallback

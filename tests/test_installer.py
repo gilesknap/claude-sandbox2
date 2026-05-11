@@ -13,6 +13,7 @@ from claude_sandbox.installer import (
     OUR_HOOK_BLOCK,
     DryRunPlan,
     SettingsConflictError,
+    link_claude_to_terminal_config,
     place_workspace_hook,
     place_workspace_settings,
     real_claude_path,
@@ -241,3 +242,63 @@ def test_resolve_real_claude_source_follows_home_local_symlink(
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     resolved = installer._resolve_real_claude_source()
     assert resolved == real.resolve()
+
+
+# ---------------------------------------------------------------------------
+# link_claude_to_terminal_config — shared /user-terminal-config/.claude
+# ---------------------------------------------------------------------------
+
+
+def test_link_claude_noop_when_target_missing(tmp_path: Path) -> None:
+    """No /user-terminal-config/.claude on this host → silent no-op."""
+    link = tmp_path / "home" / ".claude"
+    target = tmp_path / "no-such-dir"
+    link_claude_to_terminal_config(target=target, link=link)
+    assert not link.exists()
+
+
+def test_link_claude_creates_symlink_when_target_exists(tmp_path: Path) -> None:
+    target = tmp_path / "user-terminal-config" / ".claude"
+    target.mkdir(parents=True)
+    link = tmp_path / "home" / ".claude"
+
+    link_claude_to_terminal_config(target=target, link=link)
+    assert link.is_symlink()
+    assert link.resolve() == target.resolve()
+
+
+def test_link_claude_is_idempotent(tmp_path: Path) -> None:
+    target = tmp_path / "user-terminal-config" / ".claude"
+    target.mkdir(parents=True)
+    link = tmp_path / "home" / ".claude"
+
+    link_claude_to_terminal_config(target=target, link=link)
+    link_claude_to_terminal_config(target=target, link=link)  # second call is a no-op
+    assert link.resolve() == target.resolve()
+
+
+def test_link_claude_refuses_to_clobber_real_dir(tmp_path: Path) -> None:
+    target = tmp_path / "user-terminal-config" / ".claude"
+    target.mkdir(parents=True)
+    link = tmp_path / "home" / ".claude"
+    link.mkdir(parents=True)
+    (link / "settings.json").write_text("{}")
+
+    with pytest.raises(SettingsConflictError, match="real directory"):
+        link_claude_to_terminal_config(target=target, link=link)
+    # The existing dir + its contents must survive.
+    assert (link / "settings.json").read_text() == "{}"
+
+
+def test_link_claude_refuses_to_clobber_wrong_symlink(tmp_path: Path) -> None:
+    target = tmp_path / "user-terminal-config" / ".claude"
+    target.mkdir(parents=True)
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    link = tmp_path / "home" / ".claude"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(other)
+
+    with pytest.raises(SettingsConflictError, match="symlink"):
+        link_claude_to_terminal_config(target=target, link=link)
+    assert link.resolve() == other.resolve()
