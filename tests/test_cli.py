@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from claude_sandbox.cli import app
+from claude_sandbox.__main__ import app
 
 runner = CliRunner()
 
