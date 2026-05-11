@@ -1,0 +1,57 @@
+// Minimal devcontainer so this repo dogfoods its own bwrap shadow.
+//
+// On first open, postCreate runs `bash install`, which apt-installs
+// bubblewrap/nodejs/gh, drops the shadow at /usr/local/bin/claude, and
+// populates /opt/claude-sandbox-src. From then on every `claude`
+// invocation goes through the sandbox, so the workspace's
+// UserPromptSubmit hook (.claude/hooks/sandbox-check.sh) stops firing
+// `BLOCKED: IS_SANDBOX unset`.
+//
+// We deliberately do NOT add --cap-add=SYS_ADMIN here. v1's bwrap path
+// is rootless and only requires unprivileged user namespaces, which
+// rootless podman gives out of the box (see probe.kernel_userns_or_refuse).
+{
+    "name": "claude-sandbox",
+    "build": {
+        "dockerfile": "../Dockerfile",
+        "target": "developer"
+    },
+    // `install` refuses on non-root (v1 path), and the bwrap shadow
+    // expects /root as $HOME for the strict-under-/root inversion.
+    // Host-mode / non-root is tracked as #4.
+    "remoteUser": "root",
+    "remoteEnv": {
+        "IN_DEVCONTAINER": "1"
+    },
+    "initializeCommand": ".devcontainer/initializeCommand.sh",
+    "postCreateCommand": ".devcontainer/postCreate.sh",
+    "runArgs": [
+        // Allow bind mounts to work on SELinux hosts (Fedora, RHEL).
+        "--security-opt=label=disable",
+        // Block setuid/setgid escalation. Safe here: rootless container
+        // runs as root and has no need for sudo.
+        "--security-opt=no-new-privileges"
+    ],
+    "mounts": [
+        // Persist user-level Claude state (settings, memory, skills)
+        // across rebuilds. Workspace-level .claude/ in this repo is a
+        // separate thing — committed to git — and lives at
+        // /workspaces/claude-sandbox2/.claude/.
+        //
+        // gh / glab tokens are deliberately NOT mounted from the host.
+        // They live inside the container filesystem at
+        // /root/.config/{gh,glab-cli} — acquired by running `gh auth
+        // login` / `glab auth login` once per container. The bwrap
+        // shadow still selectively re-binds those two paths through
+        // the strict-under-/root inversion (see
+        // src/claude_sandbox/data/bwrap_argv.sh).
+        {
+            "source": "${localEnv:HOME}/.config/terminal-config/.claude",
+            "target": "/root/.claude",
+            "type": "bind"
+        }
+    ],
+    // Mount the parent directory so peer repos under ~/workspaces are
+    // reachable as siblings (same convention as python-copier-template).
+    "workspaceMount": "source=${localWorkspaceFolder}/..,target=/workspaces,type=bind"
+}

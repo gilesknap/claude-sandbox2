@@ -89,15 +89,65 @@ def merge_file(existing_path: Path, ours: dict) -> dict:
     if not existing_path.exists():
         return merge({}, ours)
     text = existing_path.read_text()
-    if not text.strip():
+    # Claude Code itself writes settings.json as JSONC (// and /* */
+    # comments allowed), so strict json.loads rejects perfectly valid
+    # user files. Strip comments before parsing, but string-aware so we
+    # don't mangle values like {"url": "https://x"}.
+    stripped = _strip_jsonc_comments(text)
+    if not stripped.strip():
         return merge({}, ours)
     try:
-        existing = json.loads(text)
+        existing = json.loads(stripped)
     except json.JSONDecodeError as exc:
         raise SettingsConflictError(
             f"existing {existing_path} is not valid JSON; refusing to overwrite ({exc.msg})."
         ) from exc
     return merge(existing, ours)
+
+
+def _strip_jsonc_comments(text: str) -> str:
+    """Remove `//` line and `/* */` block comments, ignoring those inside strings.
+
+    Tracks JSON-string state (with backslash escapes) so URLs and
+    comment-like fragments inside string values survive. Does not
+    attempt JSON5 trailing-comma stripping — Claude Code only emits
+    comments, not other JSON5 extensions.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    in_string = False
+    while i < n:
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n and text[i + 1] == "/":
+            i += 2
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        if ch == "/" and i + 1 < n and text[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                i += 1
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def _first_token(command: str) -> str:

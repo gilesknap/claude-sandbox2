@@ -69,8 +69,21 @@ def bwrap_or_refuse() -> None:
             "claude-sandbox: refusing — bwrap not on PATH after install. "
             "Sandbox would not work on this host."
         )
+    # Bind host rootfs read-only so /usr/bin/true is actually visible
+    # inside the probe sandbox. Without this, bwrap starts from an empty
+    # root, fails to exec `true`, and the non-zero return is misdiagnosed
+    # as a userns failure on hosts where userns is fine.
     result = subprocess.run(
-        ["bwrap", "--unshare-user", "--unshare-pid", "--tmpfs", "/tmp", "--", "true"],
+        [
+            "bwrap",
+            "--unshare-user",
+            "--unshare-pid",
+            "--ro-bind",
+            "/",
+            "/",
+            "--",
+            "/usr/bin/true",
+        ],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

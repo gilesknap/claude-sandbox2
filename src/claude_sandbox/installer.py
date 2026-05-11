@@ -124,28 +124,78 @@ def _plan(workspace: Path, src_dir: Path) -> DryRunPlan:
     return plan
 
 
-def place_real_claude() -> None:
-    """Move ~/.local/bin/claude (Anthropic's installer drop) to /opt/claude/bin/claude.
+# Sentinel substrings every shadow contains (the recursion-guard env
+# var and the sourced bwrap-argv builder). A real claude binary contains
+# neither, so finding either in the first 4 KB is a reliable "this is a
+# shadow, not the real thing" signal.
+_SHADOW_SENTINELS = (b"IS_SANDBOX", b"bwrap_argv_build")
 
-    The shadow at /usr/local/bin/claude must win on $PATH; moving the
-    real binary out of $HOME/.local/bin guarantees that even users with
-    that on PATH hit the shadow first.
+
+def _looks_like_shadow(path: Path) -> bool:
+    """True if `path` is a bash-script shadow rather than the real Claude binary.
+
+    The real claude is a multi-hundred-MB compiled binary; the shadow is
+    a small bash script. A shebang + sentinel-substring check on the
+    first 4 KB distinguishes them cheaply.
+    """
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(4096)
+    except OSError:
+        return False
+    if not head.startswith(b"#!"):
+        return False
+    return any(sentinel in head for sentinel in _SHADOW_SENTINELS)
+
+
+def _resolve_real_claude_source() -> Path | None:
+    """Locate the real Claude binary Anthropic's installer dropped.
+
+    Tries ~/.local/bin/claude (resolving through the symlink Anthropic
+    now uses to point at the versioned binary under ~/.local/share),
+    then falls back to `shutil.which("claude")` — but skips any
+    candidate that looks like our shadow, so a shadow already on $PATH
+    can never be copied into REAL_CLAUDE_PATH.
+    """
+    home_local = Path.home() / ".local" / "bin" / "claude"
+    if home_local.exists():
+        resolved = home_local.resolve()
+        if resolved.is_file() and not _looks_like_shadow(resolved):
+            return resolved
+    which = shutil.which("claude")
+    if which:
+        candidate = Path(which).resolve()
+        if candidate.is_file() and not _looks_like_shadow(candidate):
+            return candidate
+    return None
+
+
+def place_real_claude() -> None:
+    """Place the real Claude binary at /opt/claude/bin/claude.
+
+    The shadow at /usr/local/bin/claude must win on $PATH; parking the
+    real binary under /opt guarantees that even users with
+    ~/.local/bin on PATH hit the shadow first.
+
+    Idempotent. Replaces the target if it's actually a shadow (a prior
+    install that ran with a shadow already on $PATH could end up with
+    the shadow copied into REAL_CLAUDE_PATH; the shadow then execs
+    itself forever, hanging every launch).
     """
     REAL_CLAUDE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if REAL_CLAUDE_PATH.exists():
+    if REAL_CLAUDE_PATH.is_file() and not _looks_like_shadow(REAL_CLAUDE_PATH):
         return
-    home_local = Path.home() / ".local" / "bin" / "claude"
-    if home_local.exists() and not home_local.is_symlink():
-        shutil.move(str(home_local), str(REAL_CLAUDE_PATH))
-        REAL_CLAUDE_PATH.chmod(0o755)
-    elif shutil.which("claude"):
-        # Best-effort fallback: copy whatever `claude` resolves to today.
-        # Better than refusing — the user can rerun once they've curl-bashed
-        # the Anthropic installer.
-        resolved = shutil.which("claude")
-        if resolved:
-            shutil.copy2(resolved, REAL_CLAUDE_PATH)
-            REAL_CLAUDE_PATH.chmod(0o755)
+
+    source = _resolve_real_claude_source()
+    if source is None:
+        return
+
+    # Atomic via tmp + replace — never leave a half-written 200+ MB
+    # binary at REAL_CLAUDE_PATH if the copy is interrupted.
+    tmp = REAL_CLAUDE_PATH.with_name(REAL_CLAUDE_PATH.name + ".tmp")
+    shutil.copy2(str(source), str(tmp))
+    tmp.chmod(0o755)
+    os.replace(str(tmp), str(REAL_CLAUDE_PATH))
 
 
 def place_shadow(src_dir: Path) -> None:

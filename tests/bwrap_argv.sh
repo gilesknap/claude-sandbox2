@@ -59,16 +59,26 @@ assert_contains scenario1 "$ARGV1" "bwrap"
 assert_contains scenario1 "$ARGV1" "--ro-bind"
 assert_contains scenario1 "$ARGV1" "--cap-drop"
 assert_contains scenario1 "$ARGV1" "ALL"
+assert_contains scenario1 "$ARGV1" "--unshare-user-try"
 assert_contains scenario1 "$ARGV1" "--unshare-pid"
 assert_contains scenario1 "$ARGV1" "--unshare-ipc"
 assert_contains scenario1 "$ARGV1" "--unshare-uts"
 assert_contains scenario1 "$ARGV1" "--new-session"
 assert_contains scenario1 "$ARGV1" "--die-with-parent"
 assert_contains scenario1 "$ARGV1" "--clearenv"
-assert_contains scenario1 "$ARGV1" "/run/secrets"
+# The /run/secrets mask is now conditional on the host having
+# /run/secrets — bwrap can't mkdir into a read-only /run when the
+# parent has no such subdir. We check both branches behaviourally.
+if [ -d /run/secrets ]; then
+    assert_contains scenario1 "$ARGV1" "/run/secrets"
+else
+    assert_not_contains scenario1 "$ARGV1" "/run/secrets"
+fi
 assert_contains scenario1 "$ARGV1" "IS_SANDBOX"
 assert_contains scenario1 "$ARGV1" "/etc/claude-gitconfig"
 assert_contains scenario1 "$ARGV1" "/opt/claude/bin/claude"
+# Default mode mounts a fresh procfs; the bind-/proc fallback is off.
+assert_contains scenario1 "$ARGV1" "--proc"
 
 # --- Scenario 2: workspace at an unusual path ---
 
@@ -97,6 +107,13 @@ ARGV3a="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
 set -e
 assert_contains scenario3a "$ARGV3a" "$TMPHOME/.claude"
 assert_not_contains scenario3a "$ARGV3a" "$TMPHOME/.cache"
+# Neither credential dir exists in this fresh tmphome; both binds
+# must be absent so a missing host directory cannot cause a launch
+# failure.
+assert_not_contains scenario3a "$ARGV3a" "$TMPHOME/.config/gh"
+assert_not_contains scenario3a "$ARGV3a" "$TMPHOME/.config/glab-cli"
+# .claude.json missing -> bind must be absent (same reasoning).
+assert_not_contains scenario3a "$ARGV3a" "$TMPHOME/.claude.json"
 
 mkdir -p "$TMPHOME/.cache"
 set +e
@@ -105,6 +122,55 @@ ARGV3b="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
 set -e
 assert_contains scenario3b "$ARGV3b" "$TMPHOME/.claude"
 assert_contains scenario3b "$ARGV3b" "$TMPHOME/.cache"
+
+# --- Scenario 3c: gh and glab credential dirs both present ---
+mkdir -p "$TMPHOME/.config/gh" "$TMPHOME/.config/glab-cli"
+set +e
+ARGV3c="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
+    bwrap_argv_build "$TMPHOME" /opt/claude/bin/claude)"
+set -e
+assert_contains scenario3c "$ARGV3c" "$TMPHOME/.config/gh"
+assert_contains scenario3c "$ARGV3c" "$TMPHOME/.config/glab-cli"
+# A sibling under .config (e.g. VS Code) must NOT be bound even when
+# the directory exists — only the explicit allowlist is exposed.
+mkdir -p "$TMPHOME/.config/Code"
+set +e
+ARGV3d="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
+    bwrap_argv_build "$TMPHOME" /opt/claude/bin/claude)"
+set -e
+assert_not_contains scenario3d "$ARGV3d" "$TMPHOME/.config/Code"
+
+# --- Scenario 3e: ~/.claude.json present is bound back ---
+# Without this bind the strict-under-/root tmpfs would swallow Claude
+# Code's OAuth token on every launch.
+touch "$TMPHOME/.claude.json"
+set +e
+ARGV3e="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
+    bwrap_argv_build "$TMPHOME" /opt/claude/bin/claude)"
+set -e
+assert_contains scenario3e "$ARGV3e" "$TMPHOME/.claude.json"
+
+# --- Scenario 4: CLAUDE_SANDBOX_FRESH_PROC=0 swaps --proc for --ro-bind /proc ---
+# Triggered by the shadow's launch-time probe when seccomp blocks
+# mount(proc) (typical of nested podman/docker on RHEL). The fallback
+# loses pid-namespace isolation in the procfs view but keeps the rest
+# of the sandbox functional.
+
+set +e
+ARGV4="$(HOME=/root CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
+    CLAUDE_SANDBOX_FRESH_PROC=0 \
+    bwrap_argv_build /workspaces/foo /opt/claude/bin/claude)"
+set -e
+# In degraded mode the fresh-proc mount is gone and the bind-/proc pair
+# is present. grep -A1 matches the line *after* the flag so we assert
+# the pair as a unit, not as two unrelated tokens.
+if printf '%s\n' "$ARGV4" | grep -A1 '^--ro-bind$' | grep -qx '/proc'; then
+    PASSED=$((PASSED+1))
+else
+    FAILED=$((FAILED+1))
+    echo "FAIL: scenario4 — expected --ro-bind /proc /proc fallback pair" >&2
+fi
+assert_not_contains scenario4 "$ARGV4" "--proc"
 
 echo "bwrap_argv.sh: $PASSED passed / $FAILED failed"
 [ "$FAILED" -eq 0 ]

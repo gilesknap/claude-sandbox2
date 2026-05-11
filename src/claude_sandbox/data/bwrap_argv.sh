@@ -32,12 +32,39 @@ bwrap_argv_build() {
         bwrap
         --ro-bind / /
         --dev-bind /dev /dev
-        --proc /proc
+    )
+
+    # Fresh procfs (--proc /proc) gives the sandbox a per-pid-namespace
+    # view, hiding host PIDs. In some nested-container environments
+    # (e.g. podman/docker with strict seccomp) mount(MS_PROC) is denied
+    # even from inside a fresh user+pid namespace. CLAUDE_SANDBOX_FRESH_PROC=0
+    # falls back to a read-only bind of the host /proc — host PIDs become
+    # visible (read-only), but the rest of the sandbox still works. The
+    # shadow probes at launch and flips this only when forced to.
+    if [ "${CLAUDE_SANDBOX_FRESH_PROC:-1}" = "0" ]; then
+        argv+=( --ro-bind /proc /proc )
+    else
+        argv+=( --proc /proc )
+    fi
+
+    argv+=(
         --tmpfs /tmp
-        --tmpfs /run/user
-        # tmpfs over /run/secrets closes Docker/Compose-style secret
-        # bind-mounts even when the host populates them.
-        --tmpfs /run/secrets
+    )
+
+    # /run/user and /run/secrets are tmpfs-masked ONLY when the host
+    # actually has them. In nested containers /run is often read-only
+    # and these subdirs may not exist; bwrap would then fail to mkdir
+    # the mount point. The mask is a no-op when the source is absent
+    # anyway (verify-sandbox checks 13/14 pass trivially against a
+    # non-existent path), so we drop the mount entirely in that case.
+    if [ -d /run/user ]; then
+        argv+=( --tmpfs /run/user )
+    fi
+    if [ -d /run/secrets ]; then
+        argv+=( --tmpfs /run/secrets )
+    fi
+
+    argv+=(
         # Strict-under-/root by inversion: wipe $HOME, then bind back
         # only what Claude legitimately needs. Anything we forgot to
         # enumerate stays masked — the whole point of inverting.
@@ -47,9 +74,33 @@ bwrap_argv_build() {
     if [ -d "$home/.claude" ]; then
         argv+=( --bind "$home/.claude" "$home/.claude" )
     fi
+    # Claude Code stores account state (OAuth token, recent-projects
+    # list, settings) in ~/.claude.json — a top-level *file*, not under
+    # the ~/.claude/ directory. Without this bind the file lives in the
+    # in-sandbox tmpfs, so every fresh `claude` launch starts unauth'd.
+    # Shadow pre-creates the file before launch so a first-time login
+    # has somewhere to write.
+    if [ -f "$home/.claude.json" ]; then
+        argv+=( --bind "$home/.claude.json" "$home/.claude.json" )
+    fi
     if [ -d "$home/.cache" ]; then
         argv+=( --bind "$home/.cache" "$home/.cache" )
     fi
+
+    # Selective credential exposure: gh (~/.config/gh) and glab
+    # (~/.config/glab-cli) are the only host credential paths the
+    # sandbox trusts. Everything else under $HOME — SSH keys, VS Code
+    # cred helpers, cloud SDK caches, etc. — stays masked by the
+    # strict-under-/root inversion. Keep this list narrow: every entry
+    # is a weakening of the inversion. bwrap auto-creates $home/.config
+    # as an empty tmpfs intermediate, so the sibling subdirs are not
+    # incidentally exposed.
+    local cred_subdir
+    for cred_subdir in .config/gh .config/glab-cli; do
+        if [ -d "$home/$cred_subdir" ]; then
+            argv+=( --bind "$home/$cred_subdir" "$home/$cred_subdir" )
+        fi
+    done
 
     if [ -n "$workspace" ] && [ -d "$workspace" ]; then
         argv+=( --bind "$workspace" "$workspace" )
@@ -69,6 +120,15 @@ bwrap_argv_build() {
 
     argv+=(
         --cap-drop ALL
+        # --unshare-user-try is required when bwrap runs as root inside
+        # a nested container that lacks CAP_SYS_ADMIN — without a user
+        # namespace, the kernel refuses to clone the pid/ipc/uts
+        # namespaces below. The `-try` variant lets bwrap continue if
+        # the kernel forbids userns entirely (the install-time probe
+        # would already have refused in that case). When bwrap runs as
+        # non-root it implicitly unshares user anyway, so this is a
+        # no-op in that path.
+        --unshare-user-try
         --unshare-pid
         --unshare-ipc
         --unshare-uts

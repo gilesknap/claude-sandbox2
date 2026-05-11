@@ -108,3 +108,111 @@ def test_our_hook_block_is_correctly_shaped() -> None:
     assert isinstance(inner, list)
     assert inner[0]["type"] == "command"
     assert inner[0]["command"].endswith("sandbox-check.sh")
+
+
+# place_real_claude — shadow-at-target detection
+#
+# Regression: a previous installer run that found a shadow on $PATH could
+# copy the shadow itself into REAL_CLAUDE_PATH; the shadow then exec'd
+# itself in an infinite loop on every launch (issue #N). place_real_claude
+# must (a) recognise a shadow parked at the target and replace it, and
+# (b) never copy a shadow as the "real" binary in the first place.
+
+
+def _shadow_text() -> str:
+    """Minimal shadow-shaped script for tests."""
+    return "#!/usr/bin/env bash\nset -e\nIS_SANDBOX=1\nexec bwrap_argv_build\n"
+
+
+def _fake_real_binary_bytes() -> bytes:
+    """Bytes that mimic an ELF/Bun binary header — anything without the sentinel."""
+    return b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 1024
+
+
+def test_looks_like_shadow_detects_shadow_template(repo_root: Path) -> None:
+    """The shipped shadow template itself must be recognised as a shadow."""
+    template = repo_root / "src" / "claude_sandbox" / "data" / "claude-shadow"
+    assert installer._looks_like_shadow(template)
+
+
+def test_looks_like_shadow_rejects_real_binary(tmp_path: Path) -> None:
+    fake = tmp_path / "claude"
+    fake.write_bytes(_fake_real_binary_bytes())
+    assert not installer._looks_like_shadow(fake)
+
+
+def test_place_real_claude_replaces_shadow_at_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If REAL_CLAUDE_PATH already holds a shadow, replace it from the resolved source."""
+    target = tmp_path / "opt" / "claude" / "bin" / "claude"
+    target.parent.mkdir(parents=True)
+    target.write_text(_shadow_text())
+    target.chmod(0o755)
+    monkeypatch.setattr(installer, "REAL_CLAUDE_PATH", target)
+
+    source = tmp_path / "real-claude"
+    source.write_bytes(_fake_real_binary_bytes())
+    monkeypatch.setattr(installer, "_resolve_real_claude_source", lambda: source)
+
+    installer.place_real_claude()
+
+    assert target.read_bytes() == _fake_real_binary_bytes()
+    assert target.stat().st_mode & 0o777 == 0o755
+
+
+def test_place_real_claude_is_noop_when_target_is_real(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An existing real binary at the target must be left alone (idempotency)."""
+    target = tmp_path / "opt" / "claude" / "bin" / "claude"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(_fake_real_binary_bytes())
+    target.chmod(0o755)
+    monkeypatch.setattr(installer, "REAL_CLAUDE_PATH", target)
+
+    def _should_not_be_called() -> Path:
+        raise AssertionError("_resolve_real_claude_source called on idempotent path")
+
+    monkeypatch.setattr(installer, "_resolve_real_claude_source", _should_not_be_called)
+    installer.place_real_claude()
+    assert target.read_bytes() == _fake_real_binary_bytes()
+
+
+def test_resolve_real_claude_source_skips_shadow_on_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If `which claude` resolves to a shadow, the resolver must refuse it."""
+    home = tmp_path / "home"
+    (home / ".local" / "bin").mkdir(parents=True)
+    # ~/.local/bin/claude does NOT exist here — we want to exercise the
+    # shutil.which fallback.
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+    shadow_on_path = tmp_path / "usr" / "local" / "bin" / "claude"
+    shadow_on_path.parent.mkdir(parents=True)
+    shadow_on_path.write_text(_shadow_text())
+    shadow_on_path.chmod(0o755)
+    monkeypatch.setattr(installer.shutil, "which", lambda _name: str(shadow_on_path))
+
+    assert installer._resolve_real_claude_source() is None
+
+
+def test_resolve_real_claude_source_follows_home_local_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Anthropic's current layout: ~/.local/bin/claude -> ~/.local/share/claude/versions/X.Y.Z."""
+    home = tmp_path / "home"
+    versions_dir = home / ".local" / "share" / "claude" / "versions"
+    versions_dir.mkdir(parents=True)
+    real = versions_dir / "2.1.138"
+    real.write_bytes(_fake_real_binary_bytes())
+    real.chmod(0o755)
+
+    local_bin = home / ".local" / "bin"
+    local_bin.mkdir(parents=True)
+    (local_bin / "claude").symlink_to(real)
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    resolved = installer._resolve_real_claude_source()
+    assert resolved == real.resolve()

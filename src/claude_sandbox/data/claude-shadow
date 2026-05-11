@@ -23,6 +23,71 @@ fi
 export CLAUDE_SANDBOX_GITCONFIG_PATH="${CLAUDE_SANDBOX_GITCONFIG_PATH:-@@GITCONFIG_PATH@@}"
 
 SRC_DIR="${CLAUDE_SANDBOX_SRC_DIR:-@@SRC_DIR@@}"
+
+# Some nested-container environments (e.g. podman/docker on RHEL with
+# strict seccomp) deny mount("proc") even from inside a fresh user+pid
+# namespace. Probe once per launch: if bwrap can mount a fresh procfs
+# we keep the default secure mode; otherwise we fall back to a read-only
+# bind of the host /proc and warn. CLAUDE_SANDBOX_FRESH_PROC=0/1 set on
+# the parent shell short-circuits the probe (useful for tests and for
+# users who already know their host's behaviour). The probe takes
+# ~15 ms on a warm cache — well under the 50 ms launch budget.
+if [ -z "${CLAUDE_SANDBOX_FRESH_PROC:-}" ]; then
+    if bwrap --ro-bind / / --unshare-user-try --unshare-pid --proc /proc \
+            -- /bin/true >/dev/null 2>&1; then
+        export CLAUDE_SANDBOX_FRESH_PROC=1
+    else
+        export CLAUDE_SANDBOX_FRESH_PROC=0
+        echo "claude-sandbox: warning — kernel/seccomp denied mount(proc); falling " \
+             "back to --ro-bind /proc /proc. Host PIDs are read-only-visible inside " \
+             "the sandbox (verify-sandbox check 02/07 will reflect this). The rest " \
+             "of the sandbox is intact." >&2
+    fi
+fi
+
+# Ensure the credential dirs the bwrap argv builder selectively re-binds
+# (gh, glab) exist before launch. Without this, `gh auth login` run from
+# inside the sandbox before a token is provisioned writes into the
+# in-sandbox tmpfs and the credential vanishes when bwrap exits. mkdir
+# is sub-ms and idempotent; the dirs persist in the container fs.
+mkdir -p "${HOME:-/root}/.config/gh" "${HOME:-/root}/.config/glab-cli"
+
+# Refresh /etc/claude-gitconfig from the current host git identity on
+# every launch. Late-bind by design: at postCreate time (when
+# `bash install` ran gitconfig.generate) VS Code's
+# dev.containers.copyGitConfig may not yet have populated
+# /root/.gitconfig, so the curated config can end up with empty
+# user.name / user.email and Claude's commits land unattributed. By
+# the time the user types `claude`, copyGitConfig has long since
+# fired — re-render here so the [user] block always reflects the host
+# identity copyGitConfig copied in. ~5 ms; under the 50 ms launch
+# budget.
+#
+# Template MUST MATCH src/claude_sandbox/gitconfig.py::render. If you
+# change one, change the other (and tests/test_gitconfig.py).
+git_name=$(git config --get user.name 2>/dev/null || true)
+git_email=$(git config --get user.email 2>/dev/null || true)
+cat > "$CLAUDE_SANDBOX_GITCONFIG_PATH" <<EOF
+[user]
+    name = $git_name
+    email = $git_email
+[credential "https://github.com"]
+    helper = !gh auth git-credential
+[init]
+    defaultBranch = main
+[safe]
+    directory = *
+EOF
+
+# Same reasoning for ~/.claude.json: Claude Code writes its OAuth token
+# and recent-projects state into a top-level *file* (not under the
+# bound ~/.claude/ directory). Pre-creating it lets the argv builder's
+# `--bind` succeed on the very first launch — without this the
+# strict-under-/root tmpfs swallows the auth and the user re-logs in
+# on every invocation. `touch` on an existing file is a no-op apart
+# from mtime.
+touch "${HOME:-/root}/.claude.json"
+
 # shellcheck source=bwrap_argv.sh
 source "$SRC_DIR/src/claude_sandbox/data/bwrap_argv.sh"
 

@@ -5,10 +5,15 @@ atomic write means no half-written file is ever observable.
 from __future__ import annotations
 
 import contextlib
+import re
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from claude_sandbox import gitconfig
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SHADOW_PATH = REPO_ROOT / "src" / "claude_sandbox" / "data" / "claude-shadow"
 
 
 def test_render_includes_user_section() -> None:
@@ -97,6 +102,36 @@ def test_generate_atomic_write_no_partial_file(tmp_path: Path) -> None:
     # Output file must not exist, and no leftover tmp files.
     assert not out.exists()
     assert list(tmp_path.iterdir()) == []
+
+
+def test_shadow_heredoc_matches_python_render() -> None:
+    """The claude-shadow's per-launch refresh re-renders /etc/claude-gitconfig
+    from a bash here-doc. That here-doc and gitconfig.render() must produce
+    byte-identical output for the same (name, email) — otherwise the install-
+    time write and the per-launch refresh disagree and tests assert against
+    a template that diverges from the runtime reality.
+    """
+    shadow = SHADOW_PATH.read_text()
+    match = re.search(
+        r'cat > "\$CLAUDE_SANDBOX_GITCONFIG_PATH" <<EOF\n(?P<body>.*?)\nEOF\n',
+        shadow,
+        re.DOTALL,
+    )
+    assert match, "could not locate the gitconfig here-doc in claude-shadow"
+
+    # Run the here-doc through bash with controlled $git_name / $git_email
+    # so the comparison is on the exact bytes Claude's launch path would
+    # produce. Substituting with Python's .format would miss any bash-only
+    # quoting subtlety.
+    body = match.group("body")
+    script = f'git_name="Ada Lovelace"\ngit_email="ada@example.com"\ncat <<EOF\n{body}\nEOF'
+    rendered = subprocess.run(
+        ["bash", "-c", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert rendered == gitconfig.render("Ada Lovelace", "ada@example.com")
 
 
 def test_generate_full_body_byte_for_byte(tmp_path: Path) -> None:
