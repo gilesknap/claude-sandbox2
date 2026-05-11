@@ -113,6 +113,43 @@ def test_merge_file_invalid_json_refuses(tmp_path: Path) -> None:
     assert "valid JSON" in str(excinfo.value)
 
 
+def test_merge_file_jsonc_with_line_comments(tmp_path: Path) -> None:
+    """Claude Code writes settings.json as JSONC; the merger must read it.
+    Regression: a fully-commented-out file used to blow up `json.loads`.
+    """
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        "// commented header\n"
+        "{\n"
+        '  "env": {"FOO": "bar"} // trailing comment\n'
+        "}\n"
+    )
+    merged = merge_file(settings, OUR_HOOK_BLOCK)
+    assert merged["env"] == {"FOO": "bar"}
+    assert merged["hooks"]["UserPromptSubmit"] == [OUR_HOOK_BLOCK]
+
+
+def test_merge_file_fully_commented_out_treated_as_empty(tmp_path: Path) -> None:
+    settings = tmp_path / "settings.json"
+    settings.write_text("// {\n//   \"hooks\": { }\n// }\n")
+    merged = merge_file(settings, OUR_HOOK_BLOCK)
+    assert merged == {"hooks": {"UserPromptSubmit": [OUR_HOOK_BLOCK]}}
+
+
+def test_merge_file_block_comments_and_strings_with_slashes(tmp_path: Path) -> None:
+    """A `//` inside a string value must survive the comment stripper."""
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        "{\n"
+        "  /* block\n"
+        "     comment */\n"
+        '  "url": "https://example.com/path"\n'
+        "}\n"
+    )
+    merged = merge_file(settings, OUR_HOOK_BLOCK)
+    assert merged["url"] == "https://example.com/path"
+
+
 def test_place_workspace_settings_idempotent_on_disk(tmp_path: Path) -> None:
     """End-to-end: placing settings twice yields a byte-identical file."""
     place_workspace_settings(tmp_path)

@@ -31,7 +31,7 @@ apt-get update -qq
 # Bootstrap minimum for the clone + curl-installs; the orchestrator's
 # probe re-asserts everything before mutating workspace state.
 apt-get install -y -qq --no-install-recommends \
-    bubblewrap nodejs gh ca-certificates curl jq git
+    bubblewrap nodejs gh ca-certificates curl jq git glab
 
 # Install uv if absent. uv hosts the project venv at $SRC_DIR/.venv and
 # runs the typer CLI; depending on the system Python's pip/venv would
@@ -43,48 +43,39 @@ if ! command -v uv >/dev/null 2>&1; then
     export PATH="$HOME/.local/bin:$PATH"
 fi
 
-# glab is best-effort in slice 1 — a flaky GitLab release endpoint must
-# not gate the install. Slice 2 polishes (arch / version pinning).
-if ! command -v glab >/dev/null 2>&1; then
-    arch=""
-    case "$(uname -m)" in
-        x86_64)  arch=x86_64 ;;
-        aarch64) arch=arm64 ;;
-    esac
-    if [ -n "$arch" ]; then
-        ver="$(curl -fsSL 'https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/releases?per_page=1' \
-            | grep -oE '"tag_name":"v[^"]+"' | head -1 | sed -E 's/.*"v([^"]+)".*/\1/')" || ver=""
-        if [ -n "$ver" ]; then
-            tmp="$(mktemp -d)"
-            if curl -fsSL -o "$tmp/glab.tar.gz" \
-                "https://gitlab.com/gitlab-org/cli/-/releases/v${ver}/downloads/glab_${ver}_linux_${arch}.tar.gz"; then
-                tar -xzf "$tmp/glab.tar.gz" -C "$tmp"
-                install -m 0755 "$tmp/bin/glab" /usr/local/bin/glab
-            else
-                echo "claude-sandbox: glab — release download failed; skipping (slice 2 polishes)." >&2
-            fi
-            rm -rf "$tmp"
-        else
-            echo "claude-sandbox: glab — could not resolve latest version; skipping (slice 2 polishes)." >&2
-        fi
-    fi
-fi
-
 # Real Claude binary. Anthropic's installer drops it at ~/.local/bin/claude;
 # the orchestrator moves it to /opt/claude/bin/claude so the shadow on
-# $PATH always wins.
-if [ ! -x /opt/claude/bin/claude ] && ! command -v claude >/dev/null 2>&1; then
+# $PATH always wins. Also check ~/.local/bin/claude: a prior install that
+# ran the curl-bash but failed before the orchestrator moved the binary
+# leaves it there, and re-running curl-bash on every retry is slow.
+if [ ! -x /opt/claude/bin/claude ] \
+    && [ ! -x "${HOME}/.local/bin/claude" ] \
+    && ! command -v claude >/dev/null 2>&1; then
     curl -fsSL https://claude.ai/install.sh | bash
 fi
 
-install -d "$(dirname "$SRC_DIR")"
-if [ -d "$SRC_DIR/.git" ]; then
-    git -C "$SRC_DIR" fetch --quiet origin "$SRC_REF"
-    git -C "$SRC_DIR" checkout --quiet "$SRC_REF"
-    git -C "$SRC_DIR" reset --hard --quiet "origin/$SRC_REF"
+# When `install` is invoked from a checkout of the source tree (the
+# dogfooding loop: edit Python, re-run `./install`), skip the clone and
+# use the checkout in place. Without this the orchestrator always runs
+# against the cloned `main`, so local fixes to probe.py / installer.py
+# don't take effect until they're pushed and merged.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -z "${CLAUDE_SANDBOX_SRC_DIR:-}" ] \
+    && [ -f "$SCRIPT_DIR/pyproject.toml" ] \
+    && [ -d "$SCRIPT_DIR/src/claude_sandbox" ] \
+    && [ -d "$SCRIPT_DIR/.git" ]; then
+    SRC_DIR="$SCRIPT_DIR"
+    echo "claude-sandbox: using local checkout at $SRC_DIR (skipping clone)"
 else
-    rm -rf "$SRC_DIR"
-    git clone --quiet --branch "$SRC_REF" "$SRC_REPO" "$SRC_DIR"
+    install -d "$(dirname "$SRC_DIR")"
+    if [ -d "$SRC_DIR/.git" ]; then
+        git -C "$SRC_DIR" fetch --quiet origin "$SRC_REF"
+        git -C "$SRC_DIR" checkout --quiet "$SRC_REF"
+        git -C "$SRC_DIR" reset --hard --quiet "origin/$SRC_REF"
+    else
+        rm -rf "$SRC_DIR"
+        git clone --quiet --branch "$SRC_REF" "$SRC_REPO" "$SRC_DIR"
+    fi
 fi
 
 cd "$SRC_DIR"
