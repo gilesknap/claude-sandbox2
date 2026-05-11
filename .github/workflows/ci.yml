@@ -102,7 +102,17 @@ jobs:
           # pre-created (it's where secrets get bind-mounted in). On a
           # bare Ubuntu runner the directory doesn't exist, and because
           # the bwrap argv mounts --ro-bind / / first, bwrap can't
-          # create /run/secrets on the fly to host the --tmfps. Just
+          # create /run/secrets on the fly to host the --tmpfs. Just
           # pre-create it.
           sudo mkdir -p /run/secrets
+          # Verify Check 03 (strict-under-$HOME: only .claude/.cache visible)
+          # asserts `ls -A $HOME` is empty bar those two entries. On GitHub
+          # runners $HOME is /home/runner and $GITHUB_WORKSPACE lives at
+          # /home/runner/work/... — bwrap binds the workspace explicitly,
+          # which then appears under $HOME and trips Check 03 even though
+          # the bind is intentional. Devcontainers don't hit this because
+          # /workspaces is sibling to /root, not under it. Re-home the
+          # bwrap call to a clean dir so the check measures what it means.
+          export HOME=/tmp/sandbox-home
+          mkdir -p "$HOME/.claude" "$HOME/.cache"
           bash .github/workflows/run-verify-in-bwrap.sh
