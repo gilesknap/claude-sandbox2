@@ -55,7 +55,9 @@ class DryRunPlan:
     warnings: list[str] = field(default_factory=list)
 
 
-def install(workspace: Path | None = None, *, dry_run: bool = False) -> DryRunPlan | None:
+def install(
+    workspace: Path | None = None, *, dry_run: bool = False
+) -> DryRunPlan | None:
     """Run the full install orchestration. Raises on refusal-paths.
 
     `workspace` defaults to $PWD; tests pass a tmpdir.
@@ -99,7 +101,8 @@ def install(workspace: Path | None = None, *, dry_run: bool = False) -> DryRunPl
 
     print(
         f"claude-sandbox: install complete in {workspace}\n"
-        f"  - run 'claude' (shadow at {SHADOW_CLAUDE_PATH}) to start a sandboxed session\n"
+        f"  - run 'claude' (shadow at {SHADOW_CLAUDE_PATH}) to start a sandboxed "
+        f"session\n"
         f"  - run '/verify-sandbox' inside Claude to confirm the 17-check battery"
     )
     return None
@@ -114,10 +117,14 @@ def _plan(workspace: Path, src_dir: Path) -> DryRunPlan:
 
     plan.container_files.append((SHADOW_CLAUDE_PATH, "claude-shadow (rendered)"))
     plan.container_files.append((SHADOW_CLI_PATH, "claude-sandbox CLI shim"))
-    plan.container_files.append((REAL_CLAUDE_PATH, "real claude (moved from ~/.local/bin)"))
+    plan.container_files.append(
+        (REAL_CLAUDE_PATH, "real claude (moved from ~/.local/bin)")
+    )
     plan.container_files.append((GITCONFIG_PATH, "curated gitconfig"))
 
-    plan.workspace_files.append((workspace / ".claude" / "settings.json", "settings.json (merged)"))
+    plan.workspace_files.append(
+        (workspace / ".claude" / "settings.json", "settings.json (merged)")
+    )
     hook_dst = workspace / ".claude" / "hooks" / "sandbox-check.sh"
     plan.workspace_files.append((hook_dst, f"{src_dir}/.claude/hooks/sandbox-check.sh"))
     return plan
@@ -227,7 +234,9 @@ def place_cli_shim(src_dir: Path) -> None:
     _atomic_write(SHADOW_CLI_PATH, shim, mode=0o755)
 
 
-def write_gitconfig(name_override: str | None = None, email_override: str | None = None) -> None:
+def write_gitconfig(
+    name_override: str | None = None, email_override: str | None = None
+) -> None:
     """Generate /etc/claude-gitconfig from the host's user.name/user.email.
 
     Delegates to `gitconfig.generate` so the generation logic has one
@@ -336,5 +345,6 @@ def _resolve_repo_hook(src_dir: Path) -> Path:
             break
 
     raise FileNotFoundError(
-        f"could not locate sandbox-check.sh — looked under {src_dir} and the loaded source tree."
+        f"could not locate sandbox-check.sh — looked under {src_dir} and the "
+        f"loaded source tree."
     )

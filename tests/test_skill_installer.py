@@ -47,11 +47,15 @@ def src_dir(tmp_path: Path) -> Path:
     for name in ("diagnose", "tdd", "pocock-tdd", "pocock-diagnose"):
         d = skills / name
         d.mkdir()
-        (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {name} skill body.\n---\n")
+        (d / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: {name} skill body.\n---\n"
+        )
         (d / "EXTRA.md").write_text(f"# extra notes for {name}\n")
 
     for name in ("grill-me", "memo", "pocock-helper"):
-        (cmds / f"{name}.md").write_text(f"---\ndescription: {name} command body.\n---\n# {name}\n")
+        (cmds / f"{name}.md").write_text(
+            f"---\ndescription: {name} command body.\n---\n# {name}\n"
+        )
 
     # bundles.toml with a populated bundle and an empty bundle.
     bundles_dir = src / "src" / "claude_sandbox" / "data"
@@ -111,15 +115,21 @@ def test_install_skill_skip_if_byte_identical(src_dir: Path, workspace: Path) ->
     assert result.skipped_identical == ["diagnose"]
 
 
-def test_install_skill_refuse_if_different_content(src_dir: Path, workspace: Path) -> None:
+def test_install_skill_refuse_if_different_content(
+    src_dir: Path, workspace: Path
+) -> None:
     install_skills(["diagnose"], src_dir, workspace)
     # User edits the workspace copy.
-    (workspace / ".claude" / "skills" / "diagnose" / "SKILL.md").write_text("user edit\n")
+    (workspace / ".claude" / "skills" / "diagnose" / "SKILL.md").write_text(
+        "user edit\n"
+    )
     result = install_skills(["diagnose"], src_dir, workspace)
     assert result.refused_different == ["diagnose"]
     assert result.copied == []
     # User's edit is preserved on refuse.
-    assert (workspace / ".claude" / "skills" / "diagnose" / "SKILL.md").read_text() == "user edit\n"
+    assert (
+        workspace / ".claude" / "skills" / "diagnose" / "SKILL.md"
+    ).read_text() == "user edit\n"
 
 
 def test_install_skill_force_overwrites(src_dir: Path, workspace: Path) -> None:
@@ -136,7 +146,9 @@ def test_install_skill_all(src_dir: Path, workspace: Path) -> None:
     assert sorted(result.copied) == ["diagnose", "pocock-diagnose", "pocock-tdd", "tdd"]
 
 
-def test_install_skill_bundle_resolves_via_bundles_toml(src_dir: Path, workspace: Path) -> None:
+def test_install_skill_bundle_resolves_via_bundles_toml(
+    src_dir: Path, workspace: Path
+) -> None:
     result = install_skills([], src_dir, workspace, bundle="pocock")
     assert sorted(result.copied) == ["pocock-diagnose", "pocock-tdd"]
 

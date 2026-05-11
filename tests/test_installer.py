@@ -51,9 +51,11 @@ def test_dry_run_carries_mount_scan_warnings(
     # output.
     from claude_sandbox import probe
 
-    monkeypatch.setattr(probe, "mount_scan", lambda: ["claude-sandbox: warning — /kubeconfig"])
+    monkeypatch.setattr(
+        probe, "mount_scan", lambda: ["claude-sandbox: warning — /kubeconfig"]
+    )
     plan = installer.install(workspace=tmp_path / "ws", dry_run=True)
-    assert any("/kubeconfig" in w for w in plan.warnings)
+    assert plan is not None and any("/kubeconfig" in w for w in plan.warnings)
 
 
 def test_place_workspace_settings_clean_install(tmp_path: Path) -> None:
@@ -86,7 +88,10 @@ def test_place_workspace_hook_copy_if_missing(tmp_path: Path, repo_root: Path) -
     place_workspace_hook(tmp_path, repo_root)
     dst = tmp_path / ".claude" / "hooks" / "sandbox-check.sh"
     assert dst.is_file()
-    assert dst.read_bytes() == (repo_root / ".claude" / "hooks" / "sandbox-check.sh").read_bytes()
+    assert (
+        dst.read_bytes()
+        == (repo_root / ".claude" / "hooks" / "sandbox-check.sh").read_bytes()
+    )
 
 
 def test_place_workspace_hook_idempotent(tmp_path: Path, repo_root: Path) -> None:
@@ -144,7 +149,7 @@ def test_looks_like_shadow_rejects_real_binary(tmp_path: Path) -> None:
 def test_place_real_claude_replaces_shadow_at_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """If REAL_CLAUDE_PATH already holds a shadow, replace it from the resolved source."""
+    """If REAL_CLAUDE_PATH already holds a shadow, replace it from resolved source."""
     target = tmp_path / "opt" / "claude" / "bin" / "claude"
     target.parent.mkdir(parents=True)
     target.write_text(_shadow_text())
@@ -201,7 +206,7 @@ def test_resolve_real_claude_source_skips_shadow_on_path(
 def test_resolve_real_claude_source_follows_home_local_symlink(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Anthropic's current layout: ~/.local/bin/claude -> ~/.local/share/claude/versions/X.Y.Z."""
+    """Anthropic layout: ~/.local/bin/claude -> ~/.local/share/claude/versions/X.Y.Z."""
     home = tmp_path / "home"
     versions_dir = home / ".local" / "share" / "claude" / "versions"
     versions_dir.mkdir(parents=True)

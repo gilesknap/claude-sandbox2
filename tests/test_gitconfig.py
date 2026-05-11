@@ -124,7 +124,9 @@ def test_shadow_heredoc_matches_python_render() -> None:
     # produce. Substituting with Python's .format would miss any bash-only
     # quoting subtlety.
     body = match.group("body")
-    script = f'git_name="Ada Lovelace"\ngit_email="ada@example.com"\ncat <<EOF\n{body}\nEOF'
+    script = (
+        f'git_name="Ada Lovelace"\ngit_email="ada@example.com"\ncat <<EOF\n{body}\nEOF'
+    )
     rendered = subprocess.run(
         ["bash", "-c", script],
         check=True,

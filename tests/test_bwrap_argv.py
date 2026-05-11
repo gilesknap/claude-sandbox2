@@ -83,7 +83,9 @@ def test_argv_fresh_proc_default_uses_proc_mount() -> None:
     # the secure default — only the fresh-proc mount.
     pairs = list(zip(lines, lines[1:], lines[2:], strict=False))
     bind_proc_pair = ("--ro-bind", "/proc", "/proc")
-    assert bind_proc_pair not in pairs, "unexpected --ro-bind /proc /proc in default mode"
+    assert bind_proc_pair not in pairs, (
+        "unexpected --ro-bind /proc /proc in default mode"
+    )
 
 
 def test_argv_fresh_proc_disabled_uses_bind_mount() -> None:
@@ -95,7 +97,9 @@ def test_argv_fresh_proc_disabled_uses_bind_mount() -> None:
     assert bind_proc_pair in pairs, "expected --ro-bind /proc /proc fallback"
     # And the fresh-proc mount must NOT also be present — the two modes
     # are mutually exclusive (bwrap would conflict otherwise).
-    proc_pairs = [(a, b) for a, b in zip(lines, lines[1:], strict=False) if a == "--proc"]
+    proc_pairs = [
+        (a, b) for a, b in zip(lines, lines[1:], strict=False) if a == "--proc"
+    ]
     assert proc_pairs == [], f"unexpected --proc mount in degraded mode: {proc_pairs}"
 
 

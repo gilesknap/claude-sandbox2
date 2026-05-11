@@ -26,9 +26,9 @@ def apt_or_refuse() -> None:
     """v1 only supports Debian/Ubuntu — refuse on any other distro."""
     if shutil.which("apt-get") is None:
         raise UnsupportedHostError(
-            "claude-sandbox: refusing — claude-sandbox v1 supports Debian/Ubuntu only "
-            "(no apt-get on PATH). File an issue at gilesknap/claude-sandbox2 to request "
-            "your distro."
+            "claude-sandbox: refusing — claude-sandbox v1 supports Debian/Ubuntu "
+            "only (no apt-get on PATH). File an issue at gilesknap/claude-sandbox2 "
+            "to request your distro."
         )
 
 
@@ -91,7 +91,8 @@ def bwrap_or_refuse() -> None:
     )
     if result.returncode != 0:
         raise UserNamespacesBlockedError(
-            _diagnose_userns() + "\nclaude-sandbox: refusing — bwrap probe failed after install "
+            _diagnose_userns()
+            + "\nclaude-sandbox: refusing — bwrap probe failed after install "
             "(see causes above). Sandbox would not work on this host."
         )
 
@@ -120,9 +121,9 @@ def _diagnose_userns() -> str:
         try:
             if max_path.read_text().strip() == "0":
                 return (
-                    "claude-sandbox: refusing — /proc/sys/user/max_user_namespaces is 0. "
-                    "Fix: set sysctl user.max_user_namespaces to a positive value "
-                    "(e.g. 15000) on the host."
+                    "claude-sandbox: refusing — /proc/sys/user/max_user_namespaces "
+                    "is 0. Fix: set sysctl user.max_user_namespaces to a positive "
+                    "value (e.g. 15000) on the host."
                 )
         except OSError:
             pass
@@ -206,10 +207,10 @@ def mount_scan(mount_output: str | None = None) -> list[str]:
             continue
         if _CRED_REGEX.search(target):
             warnings.append(
-                f"claude-sandbox: warning — host bind-mount at {target} looks like a "
-                f"credential path. v1 ships no extra-mask override; the strict-under-/root "
-                f"inversion already masks anything under $HOME, so the warning is "
-                f"informational unless the path is outside $HOME."
+                f"claude-sandbox: warning — host bind-mount at {target} looks "
+                f"like a credential path. v1 ships no extra-mask override; the "
+                f"strict-under-/root inversion already masks anything under $HOME, "
+                f"so the warning is informational unless the path is outside $HOME."
             )
     return warnings
 
@@ -218,5 +219,6 @@ def _is_standard_mount(target: str) -> bool:
     if target in _STANDARD_MOUNT_EXACT:
         return True
     return any(
-        target == prefix or target.startswith(prefix + "/") for prefix in _STANDARD_MOUNT_PREFIXES
+        target == prefix or target.startswith(prefix + "/")
+        for prefix in _STANDARD_MOUNT_PREFIXES
     )

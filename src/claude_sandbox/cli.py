@@ -111,7 +111,8 @@ def upgrade_cmd(
         result = subprocess.run(cmd, check=False)
         if result.returncode != 0:
             print(
-                f"claude-sandbox: upgrade aborted — `{' '.join(cmd)}` exited {result.returncode}.",
+                f"claude-sandbox: upgrade aborted — `{' '.join(cmd)}` exited "
+                f"{result.returncode}.",
                 file=sys.stderr,
             )
             raise typer.Exit(code=result.returncode)
@@ -131,7 +132,10 @@ def list_skills_cmd(
         None,
         "--src",
         envvar="CLAUDE_SANDBOX_SRC_DIR",
-        help="Source dir to enumerate (default: locate via $PWD or /opt/claude-sandbox-src).",
+        help=(
+            "Source dir to enumerate (default: locate via $PWD or "
+            "/opt/claude-sandbox-src)."
+        ),
     ),
 ) -> None:
     """Print one shipped skill name per line, alphabetised."""
@@ -146,7 +150,10 @@ def list_commands_cmd(
         None,
         "--src",
         envvar="CLAUDE_SANDBOX_SRC_DIR",
-        help="Source dir to enumerate (default: locate via $PWD or /opt/claude-sandbox-src).",
+        help=(
+            "Source dir to enumerate (default: locate via $PWD or "
+            "/opt/claude-sandbox-src)."
+        ),
     ),
 ) -> None:
     """Print one shipped command name per line, alphabetised."""
@@ -166,7 +173,9 @@ def install_skill_cmd(
         None,
         help="Skill name(s). Globs allowed (e.g. 'pocock-*').",
     ),
-    force: bool = typer.Option(False, "--force", help="Overwrite differing workspace copies."),
+    force: bool = typer.Option(
+        False, "--force", help="Overwrite differing workspace copies."
+    ),
     all_: bool = typer.Option(False, "--all", help="Install every shipped skill."),
     bundle: str = typer.Option(
         None, "--bundle", help="Install the named bundle from bundles.toml."
@@ -203,7 +212,9 @@ def install_command_cmd(
         None,
         help="Command name(s) (no .md suffix). Globs allowed.",
     ),
-    force: bool = typer.Option(False, "--force", help="Overwrite differing workspace copies."),
+    force: bool = typer.Option(
+        False, "--force", help="Overwrite differing workspace copies."
+    ),
     all_: bool = typer.Option(False, "--all", help="Install every shipped command."),
     bundle: str = typer.Option(
         None, "--bundle", help="Install the named bundle from bundles.toml."

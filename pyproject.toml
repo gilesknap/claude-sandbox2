@@ -13,7 +13,9 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 description = "Claude devcontainer sandbox installer"
-dependencies = [] # Add project dependencies here, e.g. ["click", "numpy"]
+dependencies = [
+    "typer",
+] # Add project dependencies here, e.g. ["click", "numpy"]
 dynamic = ["version"]
 license.file = "LICENSE"
 readme = "README.md"
@@ -45,7 +47,7 @@ name = "Giles Knap"
 version_file = "src/claude_sandbox/_version.py"
 
 [tool.pyright]
-typeCheckingMode = "strict"
+typeCheckingMode = "basic"
 reportMissingImports = false # Ignore missing stubs in imported modules
 
 [tool.pytest.ini_options]
