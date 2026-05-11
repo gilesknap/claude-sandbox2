@@ -37,7 +37,7 @@ source "$ARGV_SH"
 # The leading ls -lA dump exists so a Check 03 failure on CI surfaces
 # what's actually under $HOME inside the sandbox — the spec only
 # accepts .claude and .cache, and silent failures are hard to debug.
-INNER="echo '--- HOME path:' \"\$HOME\"; echo '--- /tmp:'; ls -lA /tmp 2>&1; echo '--- HOME:'; ls -lA \"\$HOME\" 2>&1; echo '--- env HOME:'; env | grep '^HOME=' 2>&1; echo '--- end debug ---'; exec '$REPO/.venv/bin/claude-sandbox' verify --workspace '$REPO'"
+INNER='echo "--- run check 03 directly ---"; extras="$(ls -A "$HOME" 2>/dev/null | grep -vxE '"'"'\.claude|\.cache'"'"' || true)"; printf "EXTRAS=>>>%s<<<\n" "$extras"; echo "--- raw ls -A HOME ---"; ls -A "$HOME" | cat -A; echo "--- end ---"; exec '"'$REPO/.venv/bin/claude-sandbox'"' verify --workspace '"'$REPO'"
 
 # Build the argv. Workspace bind = the repo (so the verifier finds
 # .claude/commands/verify-sandbox.md and the venv).
