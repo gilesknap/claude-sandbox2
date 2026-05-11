@@ -97,4 +97,12 @@ jobs:
       - name: Run claude-sandbox verify inside a real bwrap
         env:
           IS_SANDBOX: "1"
-        run: bash .github/workflows/run-verify-in-bwrap.sh
+        run: |
+          # Devcontainers using docker-compose usually have /run/secrets
+          # pre-created (it's where secrets get bind-mounted in). On a
+          # bare Ubuntu runner the directory doesn't exist, and because
+          # the bwrap argv mounts --ro-bind / / first, bwrap can't
+          # create /run/secrets on the fly to host the --tmfps. Just
+          # pre-create it.
+          sudo mkdir -p /run/secrets
+          bash .github/workflows/run-verify-in-bwrap.sh
