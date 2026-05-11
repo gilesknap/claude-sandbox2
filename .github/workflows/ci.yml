@@ -69,7 +69,9 @@ jobs:
           sudo systemctl reload apparmor || sudo apparmor_parser -r /etc/apparmor.d/bwrap || true
           # Smoke-test that bwrap can now create a userns; surface a
           # clear failure here rather than a confusing one further down.
-          bwrap --unshare-user --unshare-pid --tmpfs /tmp -- true
+          # `true` lives at /usr/bin/true on the host but the empty
+          # rootfs inside bwrap has no FS at all unless we bind one in.
+          bwrap --ro-bind / / --unshare-user --unshare-pid -- /usr/bin/true
       - name: Set up uv
         uses: astral-sh/setup-uv@v3
         with:
