@@ -38,12 +38,16 @@ esac
 ## Check 03 — strict-under-/root
 
 `$HOME` (typically `/root`) is a tmpfs with only `.claude` and
-(optionally) `.cache` bound back in. Anything else under `/root`
-means the strict-under-/root inversion regressed.
+(optionally) `.cache` bound back in. The defence-in-depth file masks
+(checks 15–17) also bind `/dev/null` over `.gitconfig`, `.netrc`,
+`.Xauthority`, and `.ICEauthority` — so those names are expected to
+appear too, as size-zero entries (which checks 15–17 verify). Anything
+else under `$HOME` means the strict-under-/root inversion regressed.
 
 ```bash
-# ls -A skips . and ..; the only entries allowed are .claude and .cache.
-extras="$(ls -A "$HOME" 2>/dev/null | grep -vxE '\.claude|\.cache' || true)"
+# ls -A skips . and ..; the allowed entries are the .claude/.cache
+# binds plus the four masked dotfiles intentionally bound to /dev/null.
+extras="$(ls -A "$HOME" 2>/dev/null | grep -vxE '\.claude|\.cache|\.gitconfig|\.netrc|\.Xauthority|\.ICEauthority' || true)"
 [ -z "$extras" ]
 ```
 

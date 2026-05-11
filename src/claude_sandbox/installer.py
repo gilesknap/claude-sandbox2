@@ -2,10 +2,10 @@
 workspace artifacts. Idempotent — re-runs after a devcontainer rebuild
 re-establish container state without disturbing workspace edits.
 
-Slice 1 inlines two helpers (gitconfig generator, settings merger) that
-will graduate to standalone modules in slice 2 (`gitconfig.py`,
-`settings_merger.py`). Keeping them inline here keeps the slice 1
-diff focused.
+Slice 2 graduated the inline gitconfig generator and settings merger
+into standalone modules (`gitconfig.py`, `settings_merger.py`); this
+file re-exports `SettingsConflictError` for backward compatibility
+with slice 1's import surface.
 """
 
 from __future__ import annotations
@@ -15,14 +15,15 @@ import importlib.resources
 import json
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from claude_sandbox import probe
+from claude_sandbox import gitconfig, probe, settings_merger
+from claude_sandbox.settings_merger import SettingsConflictError
 
-# Container-mode v1 paths. Slice 4 introduces the install_paths
+# Container-mode v1 paths. v2 introduces an install_paths
 # parameterisation that hosts non-root + host-mode installs.
 SHADOW_CLAUDE_PATH = Path("/usr/local/bin/claude")
 SHADOW_CLI_PATH = Path("/usr/local/bin/claude-sandbox")
@@ -30,15 +31,44 @@ REAL_CLAUDE_PATH = Path("/opt/claude/bin/claude")
 GITCONFIG_PATH = Path("/etc/claude-gitconfig")
 SRC_DIR_DEFAULT = Path("/opt/claude-sandbox-src")
 
+OUR_HOOK_BLOCK = {
+    "hooks": [
+        {
+            "type": "command",
+            "command": ".claude/hooks/sandbox-check.sh",
+        }
+    ]
+}
 
-def install(workspace: Path | None = None) -> None:
+
+@dataclass
+class DryRunPlan:
+    """What an install run *would* place, without touching disk.
+
+    The orchestrator records each placement decision into one of these
+    so tests can assert on the plan without needing a writable /opt or
+    /usr/local/bin. Each list holds (target_path, source_or_blob_label).
+    """
+
+    container_files: list[tuple[Path, str]] = field(default_factory=list)
+    workspace_files: list[tuple[Path, str]] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
+def install(workspace: Path | None = None, *, dry_run: bool = False) -> DryRunPlan | None:
     """Run the full install orchestration. Raises on refusal-paths.
 
     `workspace` defaults to $PWD; tests pass a tmpdir.
+    `dry_run=True` records intended placements into a DryRunPlan and
+    skips every state mutation (probe, file write, subprocess) so the
+    orchestrator can be exercised on any host.
     """
     if workspace is None:
         workspace = Path.cwd()
     src_dir = Path(os.environ.get("CLAUDE_SANDBOX_SRC_DIR") or SRC_DIR_DEFAULT)
+
+    if dry_run:
+        return _plan(workspace, src_dir)
 
     # 1. Probe before any state mutation. apt+userns first, bwrap last
     # (bwrap may not be installed yet on a fresh devcontainer).
@@ -73,6 +103,25 @@ def install(workspace: Path | None = None) -> None:
         f"  - run '/verify-sandbox' inside Claude (or 'claude-sandbox verify') to "
         f"confirm the 18-check battery"
     )
+    return None
+
+
+def _plan(workspace: Path, src_dir: Path) -> DryRunPlan:
+    """Produce a DryRunPlan describing the full install without mutating state."""
+    plan = DryRunPlan()
+
+    # Mount-scan warnings are pure-read; safe to call.
+    plan.warnings.extend(probe.mount_scan())
+
+    plan.container_files.append((SHADOW_CLAUDE_PATH, "claude-shadow (rendered)"))
+    plan.container_files.append((SHADOW_CLI_PATH, "claude-sandbox CLI shim"))
+    plan.container_files.append((REAL_CLAUDE_PATH, "real claude (moved from ~/.local/bin)"))
+    plan.container_files.append((GITCONFIG_PATH, "curated gitconfig"))
+
+    plan.workspace_files.append((workspace / ".claude" / "settings.json", "settings.json (merged)"))
+    hook_dst = workspace / ".claude" / "hooks" / "sandbox-check.sh"
+    plan.workspace_files.append((hook_dst, f"{src_dir}/.claude/hooks/sandbox-check.sh"))
+    return plan
 
 
 def place_real_claude() -> None:
@@ -132,29 +181,15 @@ def place_cli_shim(src_dir: Path) -> None:
 def write_gitconfig(name_override: str | None = None, email_override: str | None = None) -> None:
     """Generate /etc/claude-gitconfig from the host's user.name/user.email.
 
-    Atomic write: tmp + rename. Re-running picks up host gitconfig
+    Delegates to `gitconfig.generate` so the generation logic has one
+    home (and one test target). Re-running picks up host gitconfig
     edits since the last invocation.
     """
-    user_name = name_override
-    user_email = email_override
-    if user_name is None:
-        user_name = _git_config_get("user.name")
-    if user_email is None:
-        user_email = _git_config_get("user.email")
-
-    body = (
-        "[user]\n"
-        f"    name = {user_name}\n"
-        f"    email = {user_email}\n"
-        '[credential "https://github.com"]\n'
-        "    helper = !gh auth git-credential\n"
-        "[init]\n"
-        "    defaultBranch = main\n"
-        "[safe]\n"
-        "    directory = *\n"
+    gitconfig.generate(
+        name=name_override,
+        email=email_override,
+        out_path=GITCONFIG_PATH,
     )
-    GITCONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write(GITCONFIG_PATH, body, mode=0o644)
 
 
 def place_workspace_settings(workspace: Path) -> None:
@@ -162,33 +197,13 @@ def place_workspace_settings(workspace: Path) -> None:
 
     Clean install when missing; one-key surgical merge of
     `hooks.UserPromptSubmit` when present. Refuses on conflict (a
-    different hook command pointing at a different script). Never
+    different hook command pointing at the same script). Never
     touches `permissions`, `env`, or any other key.
     """
     settings_path = workspace / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True, exist_ok=True)
 
-    hook_block = {
-        "hooks": [
-            {
-                "type": "command",
-                "command": ".claude/hooks/sandbox-check.sh",
-            }
-        ]
-    }
-
-    if not settings_path.exists():
-        merged = {"hooks": {"UserPromptSubmit": [hook_block]}}
-    else:
-        existing_text = settings_path.read_text()
-        try:
-            existing = json.loads(existing_text) if existing_text.strip() else {}
-        except json.JSONDecodeError as exc:
-            raise SettingsConflictError(
-                f"existing {settings_path} is not valid JSON; refusing to overwrite ({exc.msg})."
-            ) from exc
-        merged = merge_user_prompt_submit_hook(existing, hook_block, settings_path)
-
+    merged = settings_merger.merge_file(settings_path, OUR_HOOK_BLOCK)
     rendered = json.dumps(merged, indent=2) + "\n"
     _atomic_write(settings_path, rendered, mode=0o644)
 
@@ -217,63 +232,18 @@ def place_workspace_hook(workspace: Path, src_dir: Path) -> None:
     dst_hook.chmod(0o755)
 
 
-class SettingsConflictError(RuntimeError):
-    """Raised when surgical merge encounters real disagreement."""
+# --- backwards-compat re-export ----------------------------------------------
 
 
+# Slice 1 tests imported `merge_user_prompt_submit_hook` from this
+# module. Keep the name available so the import surface is stable; the
+# implementation now lives in `settings_merger.merge`.
 def merge_user_prompt_submit_hook(
     existing: dict,
     our_hook_block: dict,
-    settings_path: Path | None = None,
+    settings_path: Path | None = None,  # noqa: ARG001 (kept for sig stability)
 ) -> dict:
-    """Append-with-dedupe our hook block into hooks.UserPromptSubmit.
-
-    Idempotent: re-running yields a byte-identical result. Refuses
-    when the existing settings already wires the same hook script with
-    a different command (the user has edited the script's invocation —
-    don't silently win).
-    """
-    merged = dict(existing)
-    hooks = dict(merged.get("hooks") or {})
-    user_prompt_submit = list(hooks.get("UserPromptSubmit") or [])
-
-    our_inner_hooks = our_hook_block.get("hooks", [])
-    our_command = next(
-        (h.get("command") for h in our_inner_hooks if h.get("type") == "command"),
-        None,
-    )
-
-    # Search for an existing block that mentions the same hook script
-    # (matched by basename of the first whitespace-split token — the
-    # user may have absolutised the path or appended args).
-    if our_command:
-        our_basename = Path(_first_token(our_command)).name
-        for block in user_prompt_submit:
-            for entry in block.get("hooks", []):
-                if entry.get("type") != "command":
-                    continue
-                cmd = entry.get("command") or ""
-                cmd_basename = Path(_first_token(cmd)).name
-                if cmd_basename == our_basename:
-                    if cmd != our_command:
-                        path_hint = f" in {settings_path}" if settings_path else ""
-                        raise SettingsConflictError(
-                            f"refusing — UserPromptSubmit hook for {our_basename} is "
-                            f"already wired with a different command ({cmd}){path_hint}. "
-                            f"Reconcile by editing the file directly."
-                        )
-                    # Same hook already wired — no-op (idempotent).
-                    return merged
-
-    user_prompt_submit.append(our_hook_block)
-    hooks["UserPromptSubmit"] = user_prompt_submit
-    merged["hooks"] = hooks
-    return merged
-
-
-def _first_token(command: str) -> str:
-    """Return the first whitespace-delimited token of a command string."""
-    return command.split(maxsplit=1)[0] if command.strip() else ""
+    return settings_merger.merge(existing, our_hook_block)
 
 
 def _read_data_file(name: str) -> str:
@@ -294,17 +264,6 @@ def _atomic_write(path: Path, content: str, mode: int) -> None:
         with contextlib.suppress(OSError):
             os.unlink(tmp_name)
         raise
-
-
-def _git_config_get(key: str) -> str:
-    """Return the host's git config value for `key`, empty string on miss."""
-    result = subprocess.run(
-        ["git", "config", "--get", key],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip()
 
 
 def _resolve_repo_hook(src_dir: Path) -> Path:
