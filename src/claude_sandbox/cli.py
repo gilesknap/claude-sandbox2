@@ -1,15 +1,17 @@
 """typer entry point. Maps subcommands to module functions and converts
 typed exceptions to non-zero exit + stderr.
 
-The 7 commands:
+The 6 commands:
 
-  install            container artifacts + workspace wiring (slice 1)
-  verify             18-check sandbox battery (slice 1)
-  upgrade            git pull + uv sync + re-exec install (slice 2)
-  list-skills        enumerate <src>/.claude/skills/ (slice 2)
-  list-commands      enumerate <src>/.claude/commands/ (slice 2)
-  install-skill      copy named skills into <workspace>/.claude/skills/ (slice 2)
-  install-command    copy named commands into <workspace>/.claude/commands/ (slice 2)
+  install            container artifacts + workspace wiring
+  upgrade            git pull + uv sync + re-exec install
+  list-skills        enumerate <src>/.claude/skills/
+  list-commands      enumerate <src>/.claude/commands/
+  install-skill      copy named skills into <workspace>/.claude/skills/
+  install-command    copy named commands into <workspace>/.claude/commands/
+
+Verification is the slash command `/verify-sandbox` (consumed by Claude
+itself, spec at `.claude/commands/verify-sandbox.md`).
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from pathlib import Path
 
 import typer
 
-from claude_sandbox import installer, probe, skill_installer, verifier
+from claude_sandbox import installer, probe, skill_installer
 
 app = typer.Typer(
     add_completion=False,
@@ -31,7 +33,7 @@ app = typer.Typer(
 
 
 # ---------------------------------------------------------------------------
-# install / verify (carried from slice 1)
+# install
 # ---------------------------------------------------------------------------
 
 
@@ -72,22 +74,8 @@ def install_cmd(
             print(f"    {path} <- {label}")
 
 
-@app.command("verify")
-def verify_cmd(
-    workspace: Path = typer.Option(  # noqa: B008
-        None,
-        "--workspace",
-        "-w",
-        help="Workspace whose .claude/commands/verify-sandbox.md to run.",
-    ),
-) -> None:
-    """Run the 18 sandbox checks against the live process."""
-    code = verifier.run(workspace=workspace)
-    raise typer.Exit(code=code)
-
-
 # ---------------------------------------------------------------------------
-# upgrade (slice 2)
+# upgrade
 # ---------------------------------------------------------------------------
 
 
@@ -133,7 +121,7 @@ def upgrade_cmd(
 
 
 # ---------------------------------------------------------------------------
-# list-skills / list-commands (slice 2)
+# list-skills / list-commands
 # ---------------------------------------------------------------------------
 
 
@@ -168,7 +156,7 @@ def list_commands_cmd(
 
 
 # ---------------------------------------------------------------------------
-# install-skill / install-command (slice 2)
+# install-skill / install-command
 # ---------------------------------------------------------------------------
 
 

@@ -1,17 +1,13 @@
 # CI for claude-sandbox.
 #
-# pytest job          — fast, runs on every push/PR. Lint + format check
-#                       + the full pytest suite (which also runs the
-#                       bash bwrap_argv spec via test_bwrap_argv_bash.py).
-# integration job     — slower. Builds a sandbox the same way the
-#                       installer would, then runs `claude-sandbox verify`
-#                       inside it and asserts the 18-check battery is
-#                       all-PASS.
+# Lint + format check + the full pytest suite (which also runs the
+# bash bwrap_argv spec via test_bwrap_argv_bash.py). The unit tests
+# pin the bwrap argv flags, so a regression that strips e.g.
+# --unshare-pid from bwrap_argv.sh is caught at PR time without
+# needing a runtime bwrap integration job.
 #
-# We deliberately do NOT install Claude itself in CI (no Anthropic API
-# key required). The verify job uses bash-as-claude under the same
-# bwrap argv the real installer would render: `/proc/1/comm` reports
-# "claude" because we bind bash at /opt/claude/bin/claude.
+# Runtime verification is `/verify-sandbox` inside a real Claude
+# session — the spec lives at .claude/commands/verify-sandbox.md.
 
 name: ci
 on:
@@ -37,82 +33,3 @@ jobs:
         run: uv run ruff format --check src/ tests/
       - name: pytest
         run: uv run pytest -x
-
-  integration:
-    name: install + verify against bwrap on the runner
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install bubblewrap
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends \
-              bubblewrap git ca-certificates curl jq
-      - name: Allow unprivileged userns on Ubuntu 24.04
-        # Ubuntu 24.04 ships an AppArmor restriction
-        # (kernel.apparmor_restrict_unprivileged_userns=1) that blocks
-        # bwrap's user namespace setup with "setting up uid map: Permission
-        # denied". Devcontainer hosts disable this; CI runners need it
-        # toggled explicitly. We also drop a permissive AppArmor profile
-        # for /usr/bin/bwrap so the kernel restriction can't bite even
-        # if the sysctl path moves between Ubuntu releases.
-        run: |
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-          sudo tee /etc/apparmor.d/bwrap >/dev/null <<'PROFILE'
-          abi <abi/4.0>,
-          include <tunables/global>
-          profile bwrap /usr/bin/bwrap flags=(unconfined) {
-            userns,
-            include if exists <local/bwrap>
-          }
-          PROFILE
-          sudo systemctl reload apparmor || sudo apparmor_parser -r /etc/apparmor.d/bwrap || true
-          # Smoke-test that bwrap can now create a userns; surface a
-          # clear failure here rather than a confusing one further down.
-          # `true` lives at /usr/bin/true on the host but the empty
-          # rootfs inside bwrap has no FS at all unless we bind one in.
-          bwrap --ro-bind / / --unshare-user --unshare-pid -- /usr/bin/true
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          enable-cache: true
-      - name: Sync project venv
-        run: uv sync --all-extras --dev
-      - name: Set up host gitconfig the curated config will mirror
-        run: |
-          git config --global user.name "ci-runner"
-          git config --global user.email "ci@example.com"
-      - name: Generate /etc/claude-gitconfig (the curated one)
-        # The PRD's slice 2 explicitly lifts gitconfig.generate into a
-        # callable module; we use that here without going through the
-        # full installer (which would also try to move ~/.local/bin/claude
-        # and write to /usr/local/bin — neither necessary for the verify
-        # path).
-        run: |
-          sudo mkdir -p /etc
-          sudo --preserve-env=HOME,PATH \
-              "$(which uv)" run python -c \
-              "from claude_sandbox import gitconfig; gitconfig.generate()"
-          cat /etc/claude-gitconfig
-      - name: Run claude-sandbox verify inside a real bwrap
-        env:
-          IS_SANDBOX: "1"
-        run: |
-          # Devcontainers using docker-compose usually have /run/secrets
-          # pre-created (it's where secrets get bind-mounted in). On a
-          # bare Ubuntu runner the directory doesn't exist, and because
-          # the bwrap argv mounts --ro-bind / / first, bwrap can't
-          # create /run/secrets on the fly to host the --tmpfs. Just
-          # pre-create it.
-          sudo mkdir -p /run/secrets
-          # Verify Check 03 (strict-under-$HOME: only .claude/.cache visible)
-          # asserts `ls -A $HOME` is empty bar those two entries. On GitHub
-          # runners $HOME is /home/runner and $GITHUB_WORKSPACE lives at
-          # /home/runner/work/... — bwrap binds the workspace explicitly,
-          # which then appears under $HOME and trips Check 03 even though
-          # the bind is intentional. Devcontainers don't hit this because
-          # /workspaces is sibling to /root, not under it. Re-home the
-          # bwrap call to a clean dir so the check measures what it means.
-          export HOME=/tmp/sandbox-home
-          mkdir -p "$HOME/.claude" "$HOME/.cache"
-          bash .github/workflows/run-verify-in-bwrap.sh

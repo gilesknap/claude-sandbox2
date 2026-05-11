@@ -1,11 +1,11 @@
 ---
-description: Verify the Claude sandbox is intact — runs the full 18-check PASS/FAIL battery against the live process and exits non-zero on any FAIL so the command is usable as a CI assertion.
+description: Verify the Claude sandbox is intact — runs the full 17-check PASS/FAIL battery against the live process and exits non-zero on any FAIL so the command is usable as a CI assertion.
 ---
 
-`/verify-sandbox` runs exactly **18 checks** against the live Claude
+`/verify-sandbox` runs exactly **17 checks** against the live Claude
 process. Each check is a small bash test runnable inside the sandbox
 that returns PASS or FAIL with a one-line explanation. The set covers
-every defence the PRD's "Sandbox model" section establishes.
+every defence in `README-CLAUDE.md`'s "What's locked down" table.
 
 Run each check below in order, capture PASS/FAIL, and print the table
 described under "Output format" at the end. Any FAIL must cause the
@@ -40,11 +40,14 @@ esac
 `$HOME` (typically `/root`) is a tmpfs with only `.claude`,
 `.claude.json` (Claude Code's account state), and (optionally)
 `.cache` bound back in, plus a `.config` intermediate tmpfs that holds
-the `gh` / `glab-cli` credential binds. The defence-in-depth file
-masks (checks 15–17) also bind `/dev/null` over `.gitconfig`,
-`.netrc`, `.Xauthority`, and `.ICEauthority` — so those names are
-expected to appear too, as size-zero entries (which checks 15–17
-verify). Anything else under `$HOME`, or anything besides
+the `gh` / `glab-cli` credential binds. Claude Code itself writes
+`.local/{bin,share,state}/claude` and a `.local/share/applications`
+`.desktop` URL handler into the tmpfs on first launch, so `.local` is
+also expected (contents live in the tmpfs, not bound from the host).
+The defence-in-depth file masks (checks 15–17) also bind `/dev/null`
+over `.gitconfig`, `.netrc`, `.Xauthority`, and `.ICEauthority` — so
+those names are expected to appear too, as size-zero entries (which
+checks 15–17 verify). Anything else under `$HOME`, or anything besides
 `gh` / `glab-cli` under `$HOME/.config`, means the strict-under-/root
 inversion regressed.
 
@@ -52,8 +55,9 @@ inversion regressed.
 # ls -A skips . and ..; the allowed top-level entries are the
 # .claude/.cache binds, the .claude.json account-state bind, the
 # .config intermediate tmpfs for the selectively-exposed gh/glab
-# binds, and the four masked dotfiles intentionally bound to /dev/null.
-extras="$(ls -A "$HOME" 2>/dev/null | grep -vxE '\.claude|\.claude\.json|\.cache|\.config|\.gitconfig|\.netrc|\.Xauthority|\.ICEauthority' || true)"
+# binds, the .local tree Claude Code writes into the tmpfs at
+# runtime, and the four masked dotfiles intentionally bound to /dev/null.
+extras="$(ls -A "$HOME" 2>/dev/null | grep -vxE '\.claude|\.claude\.json|\.cache|\.config|\.local|\.gitconfig|\.netrc|\.Xauthority|\.ICEauthority' || true)"
 [ -z "$extras" ] || exit 1
 # When .config is present (bwrap intermediate for the credential
 # binds), assert it contains only the trusted subdirs — anything else
@@ -132,21 +136,7 @@ uts_link="$(readlink /proc/self/ns/uts 2>/dev/null || true)"
 case "$uts_link" in uts:\[*\]) exit 0 ;; *) exit 1 ;; esac
 ```
 
-## Check 10 — --share-net (outbound network reachable)
-
-`--share-net` is deliberately omitted from the unshare list — Claude
-needs network. We confirm by attempting an outbound TCP connection.
-Failing this check means the user accidentally added `--unshare-net`
-to the argv builder and broke Claude.
-
-```bash
-# Bash's /dev/tcp pseudo-device opens a TCP connection; failure means
-# either no network namespace sharing or no DNS. We accept any of
-# anthropic.com / cloudflare-dns / google-dns succeeding.
-(exec 3<>/dev/tcp/api.anthropic.com/443) 2>/dev/null && exec 3<&- 3>&-
-```
-
-## Check 11 — --new-session (TIOCSTI blocked)
+## Check 10 — --new-session (TIOCSTI blocked)
 
 `--new-session` calls `setsid()` so the controlling terminal is
 detached. An ioctl(TIOCSTI) injection attempt cannot reach the
@@ -159,7 +149,7 @@ parent shell.
 ! tty -s 2>/dev/null
 ```
 
-## Check 12 — /tmp is tmpfs and empty
+## Check 11 — /tmp is tmpfs and empty
 
 The host's `/tmp` carries VS Code IPC sockets (`vscode-ipc-*.sock`,
 `vscode-git-*.sock`). `--tmpfs /tmp` masks them. We assert no such
@@ -170,7 +160,7 @@ socket is visible.
 ! ls /tmp/vscode-ipc-*.sock /tmp/vscode-git-*.sock >/dev/null 2>&1
 ```
 
-## Check 13 — /run/user is tmpfs and empty
+## Check 12 — /run/user is tmpfs and empty
 
 `--tmpfs /run/user` masks the user's runtime directory which can hold
 DBus sockets and other IPC bridges.
@@ -179,7 +169,7 @@ DBus sockets and other IPC bridges.
 [ -z "$(ls -A /run/user 2>/dev/null)" ]
 ```
 
-## Check 14 — /run/secrets is tmpfs and empty
+## Check 13 — /run/secrets is tmpfs and empty
 
 `--tmpfs /run/secrets` closes the Docker/Compose secrets path even
 when the host has populated `/run/secrets/*`.
@@ -188,7 +178,7 @@ when the host has populated `/run/secrets/*`.
 [ -z "$(ls -A /run/secrets 2>/dev/null)" ]
 ```
 
-## Check 15 — file mask: .gitconfig empty
+## Check 14 — file mask: .gitconfig empty
 
 `--bind-try /dev/null /root/.gitconfig` is defence-in-depth on top
 of strict-under-/root. Reading the file inside the sandbox returns
@@ -198,7 +188,7 @@ empty.
 [ ! -s "$HOME/.gitconfig" ]
 ```
 
-## Check 16 — file mask: .netrc empty
+## Check 15 — file mask: .netrc empty
 
 `--bind-try /dev/null /root/.netrc` masks any host `.netrc`
 credentials.
@@ -207,7 +197,7 @@ credentials.
 [ ! -s "$HOME/.netrc" ]
 ```
 
-## Check 17 — file mask: .Xauthority empty
+## Check 16 — file mask: .Xauthority empty
 
 `--bind-try /dev/null /root/.Xauthority` masks the X11 cookie that
 would otherwise authenticate against a host X server.
@@ -216,7 +206,7 @@ would otherwise authenticate against a host X server.
 [ ! -s "$HOME/.Xauthority" ]
 ```
 
-## Check 18 — curated gitconfig active
+## Check 17 — curated gitconfig active
 
 `GIT_CONFIG_GLOBAL=/etc/claude-gitconfig` is exported and the file's
 `user.email` matches the host's. Verifies that the curated gitconfig
@@ -229,31 +219,30 @@ is in effect at every launch.
 
 ## Output format
 
-Print a header line `"/verify-sandbox: 18 checks"`, then one
+Print a header line `"/verify-sandbox: 17 checks"`, then one
 `[PASS]` / `[FAIL]` line per check (zero-padded number, name,
 one-line explanation on FAIL), then a `Summary:` line.
 
 ```
-/verify-sandbox: 18 checks
+/verify-sandbox: 17 checks
   [PASS] 01 IS_SANDBOX sentinel set
   [PASS] 02 bwrap is PID-1 ancestor
-  [PASS] 03 strict-under-/root: only .claude (+.cache) under $HOME
+  [PASS] 03 strict-under-/root: only .claude (+.cache/.local) under $HOME
   [PASS] 04 env scrub: GH_TOKEN empty
   [PASS] 05 env scrub: DISPLAY empty
   [PASS] 06 cap_drop ALL: CapEff=0000000000000000
   [PASS] 07 --unshare-pid: host PID 1 (systemd/init) not visible
   [PASS] 08 --unshare-ipc: ipcns symlink present
   [PASS] 09 --unshare-uts: utsns symlink present
-  [PASS] 10 --share-net: outbound TCP to api.anthropic.com:443 OK
-  [PASS] 11 --new-session: no controlling tty (TIOCSTI blocked)
-  [PASS] 12 /tmp tmpfs: no vscode-ipc-*.sock visible
-  [PASS] 13 /run/user empty
-  [PASS] 14 /run/secrets empty (Docker/Compose secrets masked)
-  [PASS] 15 file mask: $HOME/.gitconfig is empty
-  [PASS] 16 file mask: $HOME/.netrc is empty
-  [PASS] 17 file mask: $HOME/.Xauthority is empty
-  [PASS] 18 curated gitconfig: GIT_CONFIG_GLOBAL set, user.email present
-  Summary: 18 PASS / 0 FAIL
+  [PASS] 10 --new-session: no controlling tty (TIOCSTI blocked)
+  [PASS] 11 /tmp tmpfs: no vscode-ipc-*.sock visible
+  [PASS] 12 /run/user empty
+  [PASS] 13 /run/secrets empty (Docker/Compose secrets masked)
+  [PASS] 14 file mask: $HOME/.gitconfig is empty
+  [PASS] 15 file mask: $HOME/.netrc is empty
+  [PASS] 16 file mask: $HOME/.Xauthority is empty
+  [PASS] 17 curated gitconfig: GIT_CONFIG_GLOBAL set, user.email present
+  Summary: 17 PASS / 0 FAIL
 ```
 
 If any check FAILs, replace `[PASS]` with `[FAIL]` and append the

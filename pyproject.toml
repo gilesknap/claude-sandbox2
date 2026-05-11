@@ -36,7 +36,6 @@ packages = ["src/claude_sandbox"]
 [tool.hatch.build.targets.sdist]
 include = [
     "src/claude_sandbox",
-    "PRD.md",
     "LICENSE",
 ]
 

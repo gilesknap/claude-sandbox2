@@ -1,8 +1,9 @@
 # claude-sandbox: working notes for Claude
 
 This file documents project conventions for Claude when running on
-this repo. The PRD (`PRD.md`) is canonical; this file is the fast
-shortcut.
+this repo. The threat model and sandbox model live in
+`README-CLAUDE.md`; the executable spec for the sandbox checks lives
+in `.claude/commands/verify-sandbox.md`.
 
 ## What this project is
 
@@ -17,13 +18,12 @@ binary in `bwrap` with strict-under-`/root` inversion, `--clearenv`,
 | Path | What |
 |---|---|
 | `install` | bash, curl-bashable entry point. Probes, installs apt deps + uv + Claude, clones into `/opt/claude-sandbox-src`, re-execs `claude-sandbox install`. |
-| `src/claude_sandbox/cli.py` | typer entry point — 7 subcommands. |
+| `src/claude_sandbox/cli.py` | typer entry point — 6 subcommands. |
 | `src/claude_sandbox/installer.py` | Orchestrator. Probes -> places container artifacts -> places workspace artifacts. Idempotent. |
 | `src/claude_sandbox/probe.py` | apt detect, userns probe, mount-scan warnings. Refusal-paths raise typed exceptions. |
 | `src/claude_sandbox/settings_merger.py` | One-key surgical merger for `hooks.UserPromptSubmit`. Never touches any other key. |
 | `src/claude_sandbox/skill_installer.py` | `install-skill` / `install-command`. Glob expansion, `--all`, `--bundle`, copy-if-missing, refuse-if-different. |
 | `src/claude_sandbox/gitconfig.py` | Atomic write of `/etc/claude-gitconfig`. |
-| `src/claude_sandbox/verifier.py` | Headless 18-check runner. Extracts bash bodies from the `verify-sandbox.md` spec and runs them. |
 | `src/claude_sandbox/data/claude-shadow` | bash. The shadow `claude` binary template. Substituted by the installer. |
 | `src/claude_sandbox/data/bwrap_argv.sh` | bash. Pure function emitting the bwrap argv. Sourced by the shadow. **Bash, not Python — runs on every `claude` launch and the latency budget is < 50 ms.** |
 | `src/claude_sandbox/data/bundles.toml` | Bundle definitions for `--bundle NAME`. |
@@ -73,8 +73,7 @@ After `bash install` inside a fresh devcontainer:
 
 ```
 claude                    # always sandboxed via the /usr/local/bin/claude shadow
-claude-sandbox verify     # 18 PASS, exit 0
-/verify-sandbox           # same, but from inside Claude
+/verify-sandbox           # run the 17-check battery from inside Claude
 ```
 
 ## Editing a shipped skill or command
@@ -101,6 +100,6 @@ So one edit, two effects, no symlinks.
 
 ## Where the threat model lives
 
-`README-CLAUDE.md`. The 18 verify-sandbox checks (in
+`README-CLAUDE.md`. The 17 verify-sandbox checks (in
 `.claude/commands/verify-sandbox.md`) are the executable spec — if
 you add a defence, add a check.

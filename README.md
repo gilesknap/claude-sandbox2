@@ -19,13 +19,8 @@ curl -fsSL https://raw.githubusercontent.com/gilesknap/claude-sandbox2/main/inst
 ```
 
 That's it. The shadow `claude` on `$PATH` now wraps every invocation
-in `bwrap`. To verify:
-
-```
-claude-sandbox verify        # 18 PASS / 0 FAIL — sandbox OK
-```
-
-or run `/verify-sandbox` from inside Claude itself.
+in `bwrap`. Run `/verify-sandbox` from inside Claude to confirm the
+17-check battery passes.
 
 ## What you get
 
@@ -132,11 +127,13 @@ TIOCSTI terminal injection. Out of scope are workspace contents
 
 ```
 /verify-sandbox        # inside Claude
-claude-sandbox verify  # from a shell
 ```
 
-Both run the same 18 PASS/FAIL battery against the live process and
-exit non-zero on any FAIL — usable as a CI assertion.
+Runs the 17 PASS/FAIL battery against the live process and exits
+non-zero on any FAIL. The spec lives at
+`.claude/commands/verify-sandbox.md` — a structured battery catches
+known-defence regressions; the real assurance is whether a working
+Claude session can find a breakout, which a checklist can't measure.
 
 ## Upgrading
 

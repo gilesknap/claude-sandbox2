@@ -21,7 +21,7 @@ Output exactly the following text verbatim, with no preamble, commentary, or tra
 - `/triage` — Triage issues through a state machine driven by triage roles.
 
 **Workspace commands (`./.claude/commands/`)**
-- `/verify-sandbox` — Run the 18-check sandbox PASS/FAIL battery against the live process.
+- `/verify-sandbox` — Run the 17-check sandbox PASS/FAIL battery against the live process.
 
 **Workspace skills (`./.claude/skills/`)**
 - (none unless installed via `claude-sandbox install-skill`)

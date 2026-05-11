@@ -68,8 +68,8 @@ a UX failure mode that gets people pwned.
 ## What's locked down
 
 Each defence below is cross-referenced with the corresponding
-`/verify-sandbox` check number (run the slash command inside Claude,
-or `claude-sandbox verify` from a shell, to verify them all).
+`/verify-sandbox` check number (run the slash command inside Claude
+to verify them all).
 
 | Defence | bwrap primitive | `/verify-sandbox` |
 |---|---|---|
@@ -81,15 +81,19 @@ or `claude-sandbox verify` from a shell, to verify them all).
 | PID namespace | `--unshare-pid` | check 07 |
 | SysV IPC namespace | `--unshare-ipc` | check 08 |
 | UTS namespace | `--unshare-uts` | check 09 |
-| Network reachable (Claude needs it) | `--share-net` (NOT unshared) | check 10 |
-| TIOCSTI terminal injection blocked | `--new-session` | check 11 |
-| VS Code IPC bridges masked | `--tmpfs /tmp` | check 12 |
-| User runtime dir masked | `--tmpfs /run/user` | check 13 |
-| Docker/Compose secrets masked | `--tmpfs /run/secrets` | check 14 |
-| `.gitconfig` defence in depth | `--bind-try /dev/null /root/.gitconfig` | check 15 |
-| `.netrc` defence in depth | `--bind-try /dev/null /root/.netrc` | check 16 |
-| `.Xauthority` defence in depth | `--bind-try /dev/null /root/.Xauthority` | check 17 |
-| Curated gitconfig in effect | `GIT_CONFIG_GLOBAL=/etc/claude-gitconfig` | check 18 |
+| TIOCSTI terminal injection blocked | `--new-session` | check 10 |
+| VS Code IPC bridges masked | `--tmpfs /tmp` | check 11 |
+| User runtime dir masked | `--tmpfs /run/user` | check 12 |
+| Docker/Compose secrets masked | `--tmpfs /run/secrets` | check 13 |
+| `.gitconfig` defence in depth | `--bind-try /dev/null /root/.gitconfig` | check 14 |
+| `.netrc` defence in depth | `--bind-try /dev/null /root/.netrc` | check 15 |
+| `.Xauthority` defence in depth | `--bind-try /dev/null /root/.Xauthority` | check 16 |
+| Curated gitconfig in effect | `GIT_CONFIG_GLOBAL=/etc/claude-gitconfig` | check 17 |
+
+Network egress (`--share-net`, NOT unshared) is deliberately open so
+Claude can reach `api.anthropic.com`. It has no PASS/FAIL check —
+`--share-net` is a non-defence, and any regression makes Claude fail
+on first use rather than silently.
 
 Implicit: `NO_NEW_PRIVS` (bwrap sets it before exec, so `sudo` /
 setuid binaries are inert), `--die-with-parent` (the sandbox
@@ -150,7 +154,7 @@ From inside Claude, run:
 /verify-sandbox
 ```
 
-The command runs 18 PASS/FAIL checks against the live process and
+The command runs 17 PASS/FAIL checks against the live process and
 prints a summary table. Any FAIL exits the command non-zero (so
 you can use it as a CI assertion), and the FAIL line names which
 defence regressed.
@@ -158,14 +162,6 @@ defence regressed.
 A pre-prompt hook (`.claude/hooks/sandbox-check.sh`) runs a
 sub-second subset of these checks before every prompt and blocks
 the prompt if the sandbox is not intact.
-
-From a shell:
-
-```
-claude-sandbox verify
-```
-
-Same 18-check spec, same exit code semantics.
 
 ## What's installed
 
