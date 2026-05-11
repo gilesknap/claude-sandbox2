@@ -1,0 +1,76 @@
+# CI for claude-sandbox.
+#
+# pytest job          — fast, runs on every push/PR. Lint + format check
+#                       + the full pytest suite (which also runs the
+#                       bash bwrap_argv spec via test_bwrap_argv_bash.py).
+# integration job     — slower. Builds a sandbox the same way the
+#                       installer would, then runs `claude-sandbox verify`
+#                       inside it and asserts the 18-check battery is
+#                       all-PASS.
+#
+# We deliberately do NOT install Claude itself in CI (no Anthropic API
+# key required). The verify job uses bash-as-claude under the same
+# bwrap argv the real installer would render: `/proc/1/comm` reports
+# "claude" because we bind bash at /opt/claude/bin/claude.
+
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    name: pytest + ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Sync deps
+        run: uv sync --all-extras --dev
+      - name: ruff lint
+        run: uv run ruff check src/ tests/
+      - name: ruff format check
+        run: uv run ruff format --check src/ tests/
+      - name: pytest
+        run: uv run pytest -x
+
+  integration:
+    name: install + verify against bwrap on the runner
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bubblewrap
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+              bubblewrap git ca-certificates curl jq
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Sync project venv
+        run: uv sync --all-extras --dev
+      - name: Set up host gitconfig the curated config will mirror
+        run: |
+          git config --global user.name "ci-runner"
+          git config --global user.email "ci@example.com"
+      - name: Generate /etc/claude-gitconfig (the curated one)
+        # The PRD's slice 2 explicitly lifts gitconfig.generate into a
+        # callable module; we use that here without going through the
+        # full installer (which would also try to move ~/.local/bin/claude
+        # and write to /usr/local/bin — neither necessary for the verify
+        # path).
+        run: |
+          sudo mkdir -p /etc
+          sudo --preserve-env=HOME,PATH \
+              "$(which uv)" run python -c \
+              "from claude_sandbox import gitconfig; gitconfig.generate()"
+          cat /etc/claude-gitconfig
+      - name: Run claude-sandbox verify inside a real bwrap
+        env:
+          IS_SANDBOX: "1"
+        run: bash .github/workflows/run-verify-in-bwrap.sh

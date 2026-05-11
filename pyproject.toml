@@ -2,7 +2,7 @@
 name = "claude-sandbox"
 version = "0.1.0"
 description = "bwrap-isolated Claude Code installer for rootless-podman + Debian/Ubuntu devcontainers"
-readme = "PRD.md"
+readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
@@ -31,6 +31,7 @@ packages = ["src/claude_sandbox"]
 [tool.hatch.build.targets.wheel.force-include]
 "src/claude_sandbox/data/claude-shadow" = "claude_sandbox/data/claude-shadow"
 "src/claude_sandbox/data/bwrap_argv.sh" = "claude_sandbox/data/bwrap_argv.sh"
+"src/claude_sandbox/data/bundles.toml" = "claude_sandbox/data/bundles.toml"
 
 [tool.hatch.build.targets.sdist]
 include = [
