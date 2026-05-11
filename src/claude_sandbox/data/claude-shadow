@@ -24,24 +24,38 @@ export CLAUDE_SANDBOX_GITCONFIG_PATH="${CLAUDE_SANDBOX_GITCONFIG_PATH:-@@GITCONF
 
 SRC_DIR="${CLAUDE_SANDBOX_SRC_DIR:-@@SRC_DIR@@}"
 
-# Some nested-container environments (e.g. podman/docker on RHEL with
-# strict seccomp) deny mount("proc") even from inside a fresh user+pid
-# namespace. Probe once per launch: if bwrap can mount a fresh procfs
-# we keep the default secure mode; otherwise we fall back to a read-only
-# bind of the host /proc and warn. CLAUDE_SANDBOX_FRESH_PROC=0/1 set on
-# the parent shell short-circuits the probe (useful for tests and for
-# users who already know their host's behaviour). The probe takes
-# ~15 ms on a warm cache — well under the 50 ms launch budget.
+# Probe whether bwrap's --proc /proc actually mounts a procfs that
+# reflects the new pidns. On rootless nested userns hosts (typical
+# devcontainers) the mount succeeds but the procfs binds to bwrap's
+# outer pidns, so host PIDs leak into the sandbox's /proc even though
+# --unshare-pid creates a real pidns at the kernel level. The earlier
+# probe just ran /bin/true and called success — useless for catching
+# this. The new probe is deterministic: inside the bwrap sandbox $$
+# (kernel-cached pidns-aware PID) must equal /proc/self/status:Pid:
+# (procfs's view of self). They agree iff procfs is bound to our
+# pidns. Override on the parent shell with CLAUDE_SANDBOX_FRESH_PROC=0/1
+# to skip the probe (useful for tests, or for users who already know
+# the answer for their host). ~15 ms on warm cache.
+#
+# When the probe fails, the argv switches to --ro-bind /proc /proc.
+# /proc still reflects the host's view, but credential-bearing procfs
+# entries (environ, maps, fd, mem) stay gated by YAMA ptrace_scope=1
+# so this is information-disclosure, not credential exfil. See
+# README-CLAUDE.md for the full tally.
 if [ -z "${CLAUDE_SANDBOX_FRESH_PROC:-}" ]; then
     if bwrap --ro-bind / / --unshare-user-try --unshare-pid --proc /proc \
-            -- /bin/true >/dev/null 2>&1; then
+            --dev-bind /dev /dev \
+            -- /bin/sh -c \
+            'test "$$" = "$(awk "/^Pid:/{print \$2;exit}" /proc/self/status)"' \
+            >/dev/null 2>&1; then
         export CLAUDE_SANDBOX_FRESH_PROC=1
     else
         export CLAUDE_SANDBOX_FRESH_PROC=0
-        echo "claude-sandbox: warning — kernel/seccomp denied mount(proc); falling " \
-             "back to --ro-bind /proc /proc. Host PIDs are read-only-visible inside " \
-             "the sandbox (verify-sandbox check 02/07 will reflect this). The rest " \
-             "of the sandbox is intact." >&2
+        echo "claude-sandbox: notice — procfs view will leak host PIDs " \
+             "(bwrap --proc /proc cannot bind procfs to the new pidns on " \
+             "this rootless host). Kernel-level pidns isolation (kill / " \
+             "ptrace scoping) is intact; YAMA ptrace_scope continues to " \
+             "block credential-bearing procfs entries. See README-CLAUDE.md." >&2
     fi
 fi
 

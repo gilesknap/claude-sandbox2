@@ -21,18 +21,28 @@ bypassing the sandbox entirely. This is the fall-through sentinel.
 [ "${IS_SANDBOX:-}" = "1" ]
 ```
 
-## Check 02 — bwrap is the PID-1 ancestor
+## Check 02 — NO_NEW_PRIVS
 
-Inside `--unshare-pid`, PID 1 is the bwrap'd entry, not the host's
-init. We confirm by reading `/proc/1/comm` and asserting it is
-`bwrap` or `claude` (the exec'd target). On the host, PID 1 is
-`systemd` / `init` / similar.
+bwrap sets `PR_SET_NO_NEW_PRIVS=1` before exec'ing the target, so
+setuid binaries inside the sandbox cannot gain privileges. With
+NO_NEW_PRIVS in effect, `/proc/self/status` reports `NoNewPrivs: 1`.
+Without it, `sudo` / setuid-root binaries inside the sandbox could
+elevate (in concert with a userns escape) and break the rest of
+the threat model.
+
+The earlier check 02 read `/proc/1/comm` and expected `bwrap|claude|
+node`. That was a victim of the same procfs-leak failure mode the
+new check 07 documents — on rootless nested-userns hosts procfs is
+mounted in the outer pidns, so `/proc/1/comm` reads the devcontainer
+init (`sh`) instead of the sandbox target. The "bwrap is in our
+ancestry" property is already covered by check 01 (`IS_SANDBOX=1`
+is only set by `bwrap --setenv`), so check 02 was redundant *and*
+broken on the hosts we care about. Repurposed to cover NO_NEW_PRIVS,
+which was previously listed as "Implicit" in README-CLAUDE.md with
+no PASS/FAIL check of its own.
 
 ```bash
-case "$(cat /proc/1/comm 2>/dev/null)" in
-    bwrap|claude|node) exit 0 ;;
-    *) exit 1 ;;
-esac
+grep -q '^NoNewPrivs:[[:space:]]*1$' /proc/self/status
 ```
 
 ## Check 03 — strict-under-/root
@@ -95,18 +105,32 @@ closes the X11 reachability path.
 grep -q '^CapEff:\s*0\{16\}$' /proc/self/status
 ```
 
-## Check 07 — --unshare-pid
+## Check 07 — --unshare-pid (kernel pidns isolation)
 
-A known host PID (PID 1 on the host is always present and stable) is
-not visible inside the sandbox's PID namespace. We check that PID 1
-inside the sandbox is bwrap-or-claude (not the host's init).
+`--unshare-pid` puts the sandbox in a nested PID namespace. The
+kernel-level effect is what matters for the threat model: `kill()` /
+`ptrace()` are scoped to the new pidns, so the sandbox cannot signal
+or attach to host or devcontainer processes. We positively assert
+the nesting via `/proc/self/status:NSpid:` — outside any sandbox
+this has one entry; inside one nested pidns it has two.
+
+The companion property (procfs *view* aligned with the new pidns) is
+not checked here. On rootless devcontainer hosts bwrap's `--proc /proc`
+mounts procfs against its outer pidns rather than the spawned child's,
+so process-tree visibility leaks even though kernel kill/ptrace
+scoping is intact. The launch-time probe in claude-shadow detects this
+and sets `CLAUDE_SANDBOX_FRESH_PROC=0`. Credential-bearing procfs
+entries (`/proc/<pid>/environ`, `/maps`, `/fd`, `/mem`) stay gated by
+`PTRACE_MODE_READ_FSCREDS` + YAMA `ptrace_scope=1`, so leaked
+visibility does not become credential exfil — but see README-CLAUDE.md
+for the honest tally.
 
 ```bash
-# If we share the host pidns, /proc/1/comm reads systemd/init.
-case "$(cat /proc/1/comm 2>/dev/null)" in
-    systemd|init) exit 1 ;;
-    *) exit 0 ;;
-esac
+# NSpid: lists our PID across each pidns level (outermost first).
+# With --unshare-pid in effect we sit in at least one nested pidns,
+# so the line has >= 2 fields after the label.
+nspid_count=$(awk '$1=="NSpid:"{print NF-1;exit}' /proc/self/status)
+[ "${nspid_count:-1}" -ge 2 ]
 ```
 
 ## Check 08 — --unshare-ipc
@@ -226,7 +250,7 @@ one-line explanation on FAIL), then a `Summary:` line.
 ```
 /verify-sandbox: 17 checks
   [PASS] 01 IS_SANDBOX sentinel set
-  [PASS] 02 bwrap is PID-1 ancestor
+  [PASS] 02 NO_NEW_PRIVS: setuid escalation blocked
   [PASS] 03 strict-under-/root: only .claude (+.cache/.local) under $HOME
   [PASS] 04 env scrub: GH_TOKEN empty
   [PASS] 05 env scrub: DISPLAY empty
