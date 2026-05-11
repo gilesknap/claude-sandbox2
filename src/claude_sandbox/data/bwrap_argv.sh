@@ -134,6 +134,19 @@ bwrap_argv_build() {
         fi
     done
 
+    # Claude Code's self-check reads `installMethod` from ~/.claude/
+    # config and, when it's `native` (Anthropic's installer's default),
+    # expects to find the binary at `~/.local/bin/claude`. Without this
+    # bind that path is on the strict-under-/root tmpfs and the warning
+    # "claude command not found at /root/.local/bin/claude" fires on
+    # every launch. Bind the same real binary the shadow exec's
+    # ($real_claude = <src_dir>/.runtime/claude) so the self-check sees
+    # exactly what's running. --bind-try is harmless if $real_claude is
+    # absent (the shadow already refuses to launch in that case).
+    if [ -f "$real_claude" ]; then
+        argv+=( --bind-try "$real_claude" "$home/.local/bin/claude" )
+    fi
+
     if [ -n "$workspace" ] && [ -d "$workspace" ]; then
         argv+=( --bind "$workspace" "$workspace" )
     fi

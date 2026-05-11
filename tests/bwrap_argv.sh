@@ -217,5 +217,28 @@ else
 fi
 assert_not_contains scenario4 "$ARGV4" "--proc"
 
+# --- Scenario 5: real_claude present → bind appears at ~/.local/bin/claude ---
+# Without this bind the strict-under-/root tmpfs hides ~/.local/bin/claude,
+# and Claude Code's installMethod=native self-check warns "claude command
+# not found at /root/.local/bin/claude" on every launch.
+TMPREALCLAUDE="$(mktemp)"
+trap 'rm -rf "$TMPHOME" "$TMPSHARED"; rm -f "$TMPREALCLAUDE"' EXIT
+chmod 0755 "$TMPREALCLAUDE"
+set +e
+ARGV5="$(HOME=/root CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
+    bwrap_argv_build /workspaces/foo "$TMPREALCLAUDE")"
+set -e
+assert_contains scenario5 "$ARGV5" "$TMPREALCLAUDE"
+assert_contains scenario5 "$ARGV5" "/root/.local/bin/claude"
+
+# Scenario 5b: real_claude missing → no bind line for ~/.local/bin/claude.
+# The shadow refuses to launch in this case anyway; this just makes sure
+# the argv builder doesn't emit a broken --bind that would abort bwrap.
+set +e
+ARGV5b="$(HOME=/root CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
+    bwrap_argv_build /workspaces/foo /nonexistent/path/to/claude)"
+set -e
+assert_not_contains scenario5b "$ARGV5b" "/root/.local/bin/claude"
+
 echo "bwrap_argv.sh: $PASSED passed / $FAILED failed"
 [ "$FAILED" -eq 0 ]

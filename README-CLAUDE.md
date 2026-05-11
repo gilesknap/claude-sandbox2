@@ -193,6 +193,14 @@ Claude. The deliberate exposures are:
   PATH so `uv` resolves without a full path; appended, not
   prepended, so a malicious binary in `~/.local/bin/<sysname>`
   cannot hijack a standard command.
+- **`/root/.local/bin/claude`** (read, single file). The same real
+  Claude binary the shadow exec's (`<src_dir>/.runtime/claude`),
+  bound here so Claude Code's `installMethod=native` self-check
+  finds it at the path it expects. Without this bind, sharing
+  `~/.claude/` across host + sandbox (where the host had
+  `installMethod=native` written into config) triggers a noisy
+  "claude command not found at /root/.local/bin/claude" warning on
+  every launch.
 - **Network** (`--share-net`). Claude needs to reach
   `api.anthropic.com` and (if you use them) GitHub / GitLab over
   HTTPS. Because the network namespace is shared with the host,
