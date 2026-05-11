@@ -102,6 +102,30 @@ bwrap_argv_build() {
         fi
     done
 
+    # Selective tooling exposure: uv-managed Python interpreters live
+    # at ~/.local/share/uv/python/... and the project's .venv/bin/python
+    # is a symlink into that tree. Without these binds the symlink
+    # target is in the strict-under-/root tmpfs and resolves to nothing
+    # — `python`, `uv run`, and any `.venv/bin/*` invocation fails. The
+    # `uv` binary itself lives at ~/.local/bin/uv (and uvx if installed
+    # via the astral installer), so we bind those files individually
+    # rather than the whole ~/.local/bin (which Claude Code also
+    # writes into via tmpfs at runtime and we don't want those writes
+    # to leak back onto the host). $HOME/.local/bin is appended to
+    # PATH below so `uv` resolves without a full path. Same trust
+    # footprint as gh/glab: this is a tool cache, not credential
+    # storage — but it does mean a malicious uv-installed binary on
+    # the host could be invoked from inside the sandbox.
+    if [ -d "$home/.local/share/uv" ]; then
+        argv+=( --bind "$home/.local/share/uv" "$home/.local/share/uv" )
+    fi
+    local uv_bin
+    for uv_bin in uv uvx; do
+        if [ -f "$home/.local/bin/$uv_bin" ]; then
+            argv+=( --bind "$home/.local/bin/$uv_bin" "$home/.local/bin/$uv_bin" )
+        fi
+    done
+
     if [ -n "$workspace" ] && [ -d "$workspace" ]; then
         argv+=( --bind "$workspace" "$workspace" )
     fi
@@ -109,12 +133,18 @@ bwrap_argv_build() {
     # Defence-in-depth file masks. Strict-under-/root already hides the
     # dotfiles under $HOME, but masking them with /dev/null is free,
     # explicit, and survives if the strict-root bind ever regresses.
-    # /etc/gitconfig is masked unconditionally — it lives outside the
-    # inversion. --bind-try keeps the argv valid on hosts where the
-    # source path doesn't exist.
+    # /etc/gitconfig, /etc/shadow, and /etc/sudoers live outside the
+    # inversion and are masked unconditionally. /etc/shadow leaks the
+    # host user list (and password hashes on hosts where users have
+    # passwords); /etc/sudoers leaks the sudo policy. Both are
+    # information-disclosure rather than credential exfil under
+    # cap-drop ALL + NO_NEW_PRIVS, but masking is free. --bind-try
+    # keeps the argv valid on hosts where the source path doesn't
+    # exist.
     local mask
     for mask in "$home/.gitconfig" /etc/gitconfig "$home/.netrc" \
-                "$home/.Xauthority" "$home/.ICEauthority"; do
+                "$home/.Xauthority" "$home/.ICEauthority" \
+                /etc/shadow /etc/gshadow /etc/sudoers; do
         argv+=( --bind-try /dev/null "$mask" )
     done
 
@@ -144,7 +174,12 @@ bwrap_argv_build() {
     # cannot bleed in. DISPLAY is deliberately absent.
     local pass_through_var
     argv+=( --clearenv )
-    argv+=( --setenv PATH "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" )
+    # $HOME/.local/bin is appended (not prepended) so system tools
+    # take precedence in PATH resolution — a malicious binary written
+    # to ~/.local/bin/<sysname> can't hijack standard commands. Only
+    # `uv` / `uvx` (bound from host, see above) and Claude Code's
+    # tmpfs-written helpers actually live there.
+    argv+=( --setenv PATH "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$home/.local/bin" )
     argv+=( --setenv HOME "$home" )
     # bwrap's default user-namespace remapping maps invoking UID -> 0
     # inside, so id -u inside is always 0. Keeping USER=root consistent

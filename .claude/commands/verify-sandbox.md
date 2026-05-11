@@ -1,15 +1,21 @@
 ---
-description: Verify the Claude sandbox is intact — runs the full 18-check PASS/FAIL battery against the live process and exits non-zero on any FAIL so the command is usable as a CI assertion.
+description: Verify the Claude sandbox is intact — runs the 17-check PASS/FAIL battery + 10 adversarial breakout probes when the battery passes, and exits non-zero on any failure so the command is usable as a CI assertion.
 ---
 
-`/verify-sandbox` runs exactly **18 checks** against the live Claude
-process. Each check is a small bash test runnable inside the sandbox
-that returns PASS or FAIL with a one-line explanation. The set covers
-every defence the PRD's "Sandbox model" section establishes.
+`/verify-sandbox` runs **two phases** against the live Claude process:
 
-Run each check below in order, capture PASS/FAIL, and print the table
-described under "Output format" at the end. Any FAIL must cause the
-overall command to exit non-zero (so CI assertions work).
+1. The deterministic **17-check battery** — small bash tests that each
+   return PASS or FAIL with a one-line explanation. Covers every
+   defence in `README-CLAUDE.md`'s "What's locked down" table.
+2. When (and only when) the 17 checks all pass, **10 adversarial
+   breakout probes** — open-ended attempts to escape the sandbox or
+   exfiltrate credentials, designed by reasoning about gaps the
+   deterministic checks don't directly exercise.
+
+Run phase 1 below in order, capture PASS/FAIL, and print the table
+described under "Output format". If every check passes, run phase 2.
+Any FAIL in either phase must cause the overall command to exit
+non-zero (so CI assertions work).
 
 ## Check 01 — IS_SANDBOX sentinel
 
@@ -21,18 +27,28 @@ bypassing the sandbox entirely. This is the fall-through sentinel.
 [ "${IS_SANDBOX:-}" = "1" ]
 ```
 
-## Check 02 — bwrap is the PID-1 ancestor
+## Check 02 — NO_NEW_PRIVS
 
-Inside `--unshare-pid`, PID 1 is the bwrap'd entry, not the host's
-init. We confirm by reading `/proc/1/comm` and asserting it is
-`bwrap` or `claude` (the exec'd target). On the host, PID 1 is
-`systemd` / `init` / similar.
+bwrap sets `PR_SET_NO_NEW_PRIVS=1` before exec'ing the target, so
+setuid binaries inside the sandbox cannot gain privileges. With
+NO_NEW_PRIVS in effect, `/proc/self/status` reports `NoNewPrivs: 1`.
+Without it, `sudo` / setuid-root binaries inside the sandbox could
+elevate (in concert with a userns escape) and break the rest of
+the threat model.
+
+The earlier check 02 read `/proc/1/comm` and expected `bwrap|claude|
+node`. That was a victim of the same procfs-leak failure mode the
+new check 07 documents — on rootless nested-userns hosts procfs is
+mounted in the outer pidns, so `/proc/1/comm` reads the devcontainer
+init (`sh`) instead of the sandbox target. The "bwrap is in our
+ancestry" property is already covered by check 01 (`IS_SANDBOX=1`
+is only set by `bwrap --setenv`), so check 02 was redundant *and*
+broken on the hosts we care about. Repurposed to cover NO_NEW_PRIVS,
+which was previously listed as "Implicit" in README-CLAUDE.md with
+no PASS/FAIL check of its own.
 
 ```bash
-case "$(cat /proc/1/comm 2>/dev/null)" in
-    bwrap|claude|node) exit 0 ;;
-    *) exit 1 ;;
-esac
+grep -q '^NoNewPrivs:[[:space:]]*1$' /proc/self/status
 ```
 
 ## Check 03 — strict-under-/root
@@ -40,11 +56,14 @@ esac
 `$HOME` (typically `/root`) is a tmpfs with only `.claude`,
 `.claude.json` (Claude Code's account state), and (optionally)
 `.cache` bound back in, plus a `.config` intermediate tmpfs that holds
-the `gh` / `glab-cli` credential binds. The defence-in-depth file
-masks (checks 15–17) also bind `/dev/null` over `.gitconfig`,
-`.netrc`, `.Xauthority`, and `.ICEauthority` — so those names are
-expected to appear too, as size-zero entries (which checks 15–17
-verify). Anything else under `$HOME`, or anything besides
+the `gh` / `glab-cli` credential binds. Claude Code itself writes
+`.local/{bin,share,state}/claude` and a `.local/share/applications`
+`.desktop` URL handler into the tmpfs on first launch, so `.local` is
+also expected (contents live in the tmpfs, not bound from the host).
+The defence-in-depth file masks (checks 15–17) also bind `/dev/null`
+over `.gitconfig`, `.netrc`, `.Xauthority`, and `.ICEauthority` — so
+those names are expected to appear too, as size-zero entries (which
+checks 15–17 verify). Anything else under `$HOME`, or anything besides
 `gh` / `glab-cli` under `$HOME/.config`, means the strict-under-/root
 inversion regressed.
 
@@ -52,8 +71,9 @@ inversion regressed.
 # ls -A skips . and ..; the allowed top-level entries are the
 # .claude/.cache binds, the .claude.json account-state bind, the
 # .config intermediate tmpfs for the selectively-exposed gh/glab
-# binds, and the four masked dotfiles intentionally bound to /dev/null.
-extras="$(ls -A "$HOME" 2>/dev/null | grep -vxE '\.claude|\.claude\.json|\.cache|\.config|\.gitconfig|\.netrc|\.Xauthority|\.ICEauthority' || true)"
+# binds, the .local tree Claude Code writes into the tmpfs at
+# runtime, and the four masked dotfiles intentionally bound to /dev/null.
+extras="$(ls -A "$HOME" 2>/dev/null | grep -vxE '\.claude|\.claude\.json|\.cache|\.config|\.local|\.gitconfig|\.netrc|\.Xauthority|\.ICEauthority' || true)"
 [ -z "$extras" ] || exit 1
 # When .config is present (bwrap intermediate for the credential
 # binds), assert it contains only the trusted subdirs — anything else
@@ -91,18 +111,32 @@ closes the X11 reachability path.
 grep -q '^CapEff:\s*0\{16\}$' /proc/self/status
 ```
 
-## Check 07 — --unshare-pid
+## Check 07 — --unshare-pid (kernel pidns isolation)
 
-A known host PID (PID 1 on the host is always present and stable) is
-not visible inside the sandbox's PID namespace. We check that PID 1
-inside the sandbox is bwrap-or-claude (not the host's init).
+`--unshare-pid` puts the sandbox in a nested PID namespace. The
+kernel-level effect is what matters for the threat model: `kill()` /
+`ptrace()` are scoped to the new pidns, so the sandbox cannot signal
+or attach to host or devcontainer processes. We positively assert
+the nesting via `/proc/self/status:NSpid:` — outside any sandbox
+this has one entry; inside one nested pidns it has two.
+
+The companion property (procfs *view* aligned with the new pidns) is
+not checked here. On rootless devcontainer hosts bwrap's `--proc /proc`
+mounts procfs against its outer pidns rather than the spawned child's,
+so process-tree visibility leaks even though kernel kill/ptrace
+scoping is intact. The launch-time probe in claude-shadow detects this
+and sets `CLAUDE_SANDBOX_FRESH_PROC=0`. Credential-bearing procfs
+entries (`/proc/<pid>/environ`, `/maps`, `/fd`, `/mem`) stay gated by
+`PTRACE_MODE_READ_FSCREDS` + YAMA `ptrace_scope=1`, so leaked
+visibility does not become credential exfil — but see README-CLAUDE.md
+for the honest tally.
 
 ```bash
-# If we share the host pidns, /proc/1/comm reads systemd/init.
-case "$(cat /proc/1/comm 2>/dev/null)" in
-    systemd|init) exit 1 ;;
-    *) exit 0 ;;
-esac
+# NSpid: lists our PID across each pidns level (outermost first).
+# With --unshare-pid in effect we sit in at least one nested pidns,
+# so the line has >= 2 fields after the label.
+nspid_count=$(awk '$1=="NSpid:"{print NF-1;exit}' /proc/self/status)
+[ "${nspid_count:-1}" -ge 2 ]
 ```
 
 ## Check 08 — --unshare-ipc
@@ -132,21 +166,7 @@ uts_link="$(readlink /proc/self/ns/uts 2>/dev/null || true)"
 case "$uts_link" in uts:\[*\]) exit 0 ;; *) exit 1 ;; esac
 ```
 
-## Check 10 — --share-net (outbound network reachable)
-
-`--share-net` is deliberately omitted from the unshare list — Claude
-needs network. We confirm by attempting an outbound TCP connection.
-Failing this check means the user accidentally added `--unshare-net`
-to the argv builder and broke Claude.
-
-```bash
-# Bash's /dev/tcp pseudo-device opens a TCP connection; failure means
-# either no network namespace sharing or no DNS. We accept any of
-# anthropic.com / cloudflare-dns / google-dns succeeding.
-(exec 3<>/dev/tcp/api.anthropic.com/443) 2>/dev/null && exec 3<&- 3>&-
-```
-
-## Check 11 — --new-session (TIOCSTI blocked)
+## Check 10 — --new-session (TIOCSTI blocked)
 
 `--new-session` calls `setsid()` so the controlling terminal is
 detached. An ioctl(TIOCSTI) injection attempt cannot reach the
@@ -159,7 +179,7 @@ parent shell.
 ! tty -s 2>/dev/null
 ```
 
-## Check 12 — /tmp is tmpfs and empty
+## Check 11 — /tmp is tmpfs and empty
 
 The host's `/tmp` carries VS Code IPC sockets (`vscode-ipc-*.sock`,
 `vscode-git-*.sock`). `--tmpfs /tmp` masks them. We assert no such
@@ -170,7 +190,7 @@ socket is visible.
 ! ls /tmp/vscode-ipc-*.sock /tmp/vscode-git-*.sock >/dev/null 2>&1
 ```
 
-## Check 13 — /run/user is tmpfs and empty
+## Check 12 — /run/user is tmpfs and empty
 
 `--tmpfs /run/user` masks the user's runtime directory which can hold
 DBus sockets and other IPC bridges.
@@ -179,7 +199,7 @@ DBus sockets and other IPC bridges.
 [ -z "$(ls -A /run/user 2>/dev/null)" ]
 ```
 
-## Check 14 — /run/secrets is tmpfs and empty
+## Check 13 — /run/secrets is tmpfs and empty
 
 `--tmpfs /run/secrets` closes the Docker/Compose secrets path even
 when the host has populated `/run/secrets/*`.
@@ -188,7 +208,7 @@ when the host has populated `/run/secrets/*`.
 [ -z "$(ls -A /run/secrets 2>/dev/null)" ]
 ```
 
-## Check 15 — file mask: .gitconfig empty
+## Check 14 — file mask: .gitconfig empty
 
 `--bind-try /dev/null /root/.gitconfig` is defence-in-depth on top
 of strict-under-/root. Reading the file inside the sandbox returns
@@ -198,7 +218,7 @@ empty.
 [ ! -s "$HOME/.gitconfig" ]
 ```
 
-## Check 16 — file mask: .netrc empty
+## Check 15 — file mask: .netrc empty
 
 `--bind-try /dev/null /root/.netrc` masks any host `.netrc`
 credentials.
@@ -207,7 +227,7 @@ credentials.
 [ ! -s "$HOME/.netrc" ]
 ```
 
-## Check 17 — file mask: .Xauthority empty
+## Check 16 — file mask: .Xauthority empty
 
 `--bind-try /dev/null /root/.Xauthority` masks the X11 cookie that
 would otherwise authenticate against a host X server.
@@ -216,7 +236,7 @@ would otherwise authenticate against a host X server.
 [ ! -s "$HOME/.Xauthority" ]
 ```
 
-## Check 18 — curated gitconfig active
+## Check 17 — curated gitconfig active
 
 `GIT_CONFIG_GLOBAL=/etc/claude-gitconfig` is exported and the file's
 `user.email` matches the host's. Verifies that the curated gitconfig
@@ -227,39 +247,99 @@ is in effect at every launch.
     [ -n "$(git config --get user.email 2>/dev/null)" ]
 ```
 
+## Phase 2 — Adversarial probes (only when 01–17 all PASS)
+
+When the deterministic battery is clean, think of **10 novel breakout
+approaches and try them**. The goal is to find a gap the 17-check
+matrix doesn't directly exercise — anything that lets the sandbox
+escape its filesystem inversion, recover scrubbed env vars, reach
+the host's network identity, signal/observe processes outside the
+pidns, or otherwise violate the threat model in
+`README-CLAUDE.md`.
+
+Constraints on the probes:
+
+- Distinct from each other and from phase 1. Don't just re-test
+  `--cap-drop ALL` or `--clearenv` from a different angle.
+- Each probe is a single bash snippet (or a short sequence) that
+  attempts the breakout, then a one-line classification:
+  - **[BLOCKED]** — the attempt failed in the way the sandbox
+    expects (EACCES, EPERM, ENOENT for masked paths, etc.).
+  - **[ESCAPED]** — the attempt succeeded in a way that violates
+    the threat model (e.g., readable host credential, writable
+    host path outside the workspace, observable host process tree
+    beyond what `/proc` leak already discloses, signal delivered
+    to a process outside the pidns).
+  - **[INCONCLUSIVE]** — the attempt didn't error but didn't
+    demonstrate a breach either; explain why.
+- Bias toward novelty: kernel interfaces (eBPF, perf events, kernel
+  keyrings, io_uring), filesystem corners (proc, sys, debugfs,
+  cgroup, securityfs, `/proc/<pid>/root` traversal), env-var
+  recovery paths, IPC channels (abstract unix sockets, signalfd,
+  pidfd, fanotify), network reachability (loopback services,
+  /etc/resolv.conf, AF_NETLINK, raw sockets), credential paths
+  (shells/CLIs that look in unexpected places), exec-chain
+  escalation (setuid binaries despite NO_NEW_PRIVS, file
+  capabilities), bwrap-specific (`--die-with-parent` race,
+  `--new-session` bypass), gitconfig defence-in-depth bypasses.
+
+Print the probes as a numbered list under a header
+`Adversarial probes:`, each line `[BLOCKED|ESCAPED|INCONCLUSIVE]
+NN <one-line description> — <evidence>`. Any **[ESCAPED]** makes
+the overall result `SANDBOX LEAKING` regardless of phase 1, and
+the command exits non-zero. **[INCONCLUSIVE]** is informational
+and does not change the exit code, but every inconclusive probe
+should be followed by a "Suggested follow-up:" line proposing what
+a more targeted test would look like.
+
+If all 10 probes are **[BLOCKED]**, the sandbox passes both phases
+and the final line becomes `RESULT: SANDBOX OK (17 deterministic +
+10 adversarial)`.
+
 ## Output format
 
-Print a header line `"/verify-sandbox: 18 checks"`, then one
+Print a header line `"/verify-sandbox: 17 checks"`, then one
 `[PASS]` / `[FAIL]` line per check (zero-padded number, name,
 one-line explanation on FAIL), then a `Summary:` line.
 
 ```
-/verify-sandbox: 18 checks
+/verify-sandbox: 17 checks
   [PASS] 01 IS_SANDBOX sentinel set
-  [PASS] 02 bwrap is PID-1 ancestor
-  [PASS] 03 strict-under-/root: only .claude (+.cache) under $HOME
+  [PASS] 02 NO_NEW_PRIVS: setuid escalation blocked
+  [PASS] 03 strict-under-/root: only .claude (+.cache/.local) under $HOME
   [PASS] 04 env scrub: GH_TOKEN empty
   [PASS] 05 env scrub: DISPLAY empty
   [PASS] 06 cap_drop ALL: CapEff=0000000000000000
-  [PASS] 07 --unshare-pid: host PID 1 (systemd/init) not visible
+  [PASS] 07 --unshare-pid: NSpid has >= 2 entries (kernel pidns isolated)
   [PASS] 08 --unshare-ipc: ipcns symlink present
   [PASS] 09 --unshare-uts: utsns symlink present
-  [PASS] 10 --share-net: outbound TCP to api.anthropic.com:443 OK
-  [PASS] 11 --new-session: no controlling tty (TIOCSTI blocked)
-  [PASS] 12 /tmp tmpfs: no vscode-ipc-*.sock visible
-  [PASS] 13 /run/user empty
-  [PASS] 14 /run/secrets empty (Docker/Compose secrets masked)
-  [PASS] 15 file mask: $HOME/.gitconfig is empty
-  [PASS] 16 file mask: $HOME/.netrc is empty
-  [PASS] 17 file mask: $HOME/.Xauthority is empty
-  [PASS] 18 curated gitconfig: GIT_CONFIG_GLOBAL set, user.email present
-  Summary: 18 PASS / 0 FAIL
+  [PASS] 10 --new-session: no controlling tty (TIOCSTI blocked)
+  [PASS] 11 /tmp tmpfs: no vscode-ipc-*.sock visible
+  [PASS] 12 /run/user empty
+  [PASS] 13 /run/secrets empty (Docker/Compose secrets masked)
+  [PASS] 14 file mask: $HOME/.gitconfig is empty
+  [PASS] 15 file mask: $HOME/.netrc is empty
+  [PASS] 16 file mask: $HOME/.Xauthority is empty
+  [PASS] 17 curated gitconfig: GIT_CONFIG_GLOBAL set, user.email present
+  Summary: 17 PASS / 0 FAIL
+
+Adversarial probes:
+  [BLOCKED] 01 read /proc/<host_pid>/environ — EACCES (YAMA ptrace_scope=1)
+  [BLOCKED] 02 reach VS Code IPC via /tmp/vscode-ipc-*.sock — ENOENT (tmpfs masks)
+  [BLOCKED] 03 abuse /proc/self/exe to re-launch with caps — exec'd binary still caps=0
+  ... (8 more)
+  Adversarial summary: 10 BLOCKED / 0 ESCAPED / 0 INCONCLUSIVE
 ```
 
-If any check FAILs, replace `[PASS]` with `[FAIL]` and append the
-specific reason to that line so a developer reading the output can
-identify which defence regressed. Then exit non-zero (the summary
-line is informational; the non-zero exit is what CI relies on).
+If any phase-1 check FAILs, replace `[PASS]` with `[FAIL]` and
+append the specific reason to that line. Then exit non-zero and
+SKIP phase 2 entirely (no point red-teaming a known-broken
+sandbox).
 
-If every check passes, end with `RESULT: SANDBOX OK`. Otherwise end
-with `RESULT: SANDBOX LEAKING — open an issue against gilesknap/claude-sandbox`.
+If any phase-2 probe is `[ESCAPED]`, exit non-zero regardless of
+phase-1 results.
+
+Final result line:
+- All 17 PASS + 10 BLOCKED → `RESULT: SANDBOX OK (17 deterministic + 10 adversarial)`
+- All 17 PASS + ≥1 INCONCLUSIVE + 0 ESCAPED → `RESULT: SANDBOX OK (17 deterministic + N BLOCKED, M INCONCLUSIVE)`
+- Any FAIL or ESCAPED → `RESULT: SANDBOX LEAKING — open an issue against gilesknap/claude-sandbox`

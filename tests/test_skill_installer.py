@@ -236,7 +236,7 @@ def test_print_summary_emits_lines(
 
 
 def test_shipped_payload_lists_expected_skills(repo_root: Path) -> None:
-    """The shipped `.claude/` must contain the 5 PRD skills."""
+    """The shipped `.claude/` must contain the 5 canonical skills."""
     skills = skill_installer.list_skills(repo_root)
     expected = (
         "diagnose",

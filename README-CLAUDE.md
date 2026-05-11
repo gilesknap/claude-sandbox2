@@ -68,32 +68,69 @@ a UX failure mode that gets people pwned.
 ## What's locked down
 
 Each defence below is cross-referenced with the corresponding
-`/verify-sandbox` check number (run the slash command inside Claude,
-or `claude-sandbox verify` from a shell, to verify them all).
+`/verify-sandbox` check number (run the slash command inside Claude
+to verify them all).
 
 | Defence | bwrap primitive | `/verify-sandbox` |
 |---|---|---|
 | Sandbox is actually entered | `IS_SANDBOX=1` sentinel | check 01 |
-| bwrap is the parent process | `--unshare-pid` + exec | check 02 |
+| Setuid escalation blocked | `NO_NEW_PRIVS` (set by bwrap before exec) | check 02 |
 | Strict-under-`/root` by inversion | `--tmpfs /root` then bind `.claude` / `.claude.json` / `.cache` / `.config/{gh,glab-cli}` | check 03 |
 | Host env vars scrubbed | `--clearenv` + explicit allow-list | checks 04, 05 |
 | Zero capabilities | `--cap-drop ALL` | check 06 |
-| PID namespace | `--unshare-pid` | check 07 |
+| PID namespace (kill/ptrace scoping) | `--unshare-pid` | check 07 |
 | SysV IPC namespace | `--unshare-ipc` | check 08 |
 | UTS namespace | `--unshare-uts` | check 09 |
-| Network reachable (Claude needs it) | `--share-net` (NOT unshared) | check 10 |
-| TIOCSTI terminal injection blocked | `--new-session` | check 11 |
-| VS Code IPC bridges masked | `--tmpfs /tmp` | check 12 |
-| User runtime dir masked | `--tmpfs /run/user` | check 13 |
-| Docker/Compose secrets masked | `--tmpfs /run/secrets` | check 14 |
-| `.gitconfig` defence in depth | `--bind-try /dev/null /root/.gitconfig` | check 15 |
-| `.netrc` defence in depth | `--bind-try /dev/null /root/.netrc` | check 16 |
-| `.Xauthority` defence in depth | `--bind-try /dev/null /root/.Xauthority` | check 17 |
-| Curated gitconfig in effect | `GIT_CONFIG_GLOBAL=/etc/claude-gitconfig` | check 18 |
+| TIOCSTI terminal injection blocked | `--new-session` | check 10 |
+| VS Code IPC bridges masked | `--tmpfs /tmp` | check 11 |
+| User runtime dir masked | `--tmpfs /run/user` | check 12 |
+| Docker/Compose secrets masked | `--tmpfs /run/secrets` | check 13 |
+| `.gitconfig` defence in depth | `--bind-try /dev/null /root/.gitconfig` | check 14 |
+| `.netrc` defence in depth | `--bind-try /dev/null /root/.netrc` | check 15 |
+| `.Xauthority` defence in depth | `--bind-try /dev/null /root/.Xauthority` | check 16 |
+| Curated gitconfig in effect | `GIT_CONFIG_GLOBAL=/etc/claude-gitconfig` | check 17 |
 
-Implicit: `NO_NEW_PRIVS` (bwrap sets it before exec, so `sudo` /
-setuid binaries are inert), `--die-with-parent` (the sandbox
-disappears the moment Claude does).
+Network egress (`--share-net`, NOT unshared) is deliberately open so
+Claude can reach `api.anthropic.com`. It has no PASS/FAIL check —
+`--share-net` is a non-defence, and any regression makes Claude fail
+on first use rather than silently.
+
+Implicit: `--die-with-parent` (the sandbox disappears the moment
+Claude does).
+
+### Procfs view: what `--unshare-pid` does NOT deliver on rootless devcontainers
+
+`--unshare-pid` reliably gives kernel-level pidns isolation (the
+sandbox cannot `kill()` or `ptrace()` host or devcontainer processes
+— check 07 verifies this via `/proc/self/status:NSpid:`). The
+companion property — `/proc` reflecting *only* the sandbox's own
+process tree — depends on bwrap successfully mounting procfs against
+the new pidns. On rootless nested-userns hosts (the standard VS Code
+devcontainer pattern, where the outer container has no host
+`CAP_SYS_ADMIN`), bwrap mounts procfs against its *outer* pidns
+instead, so the sandbox's `/proc` enumerates host PIDs. We tested
+`unshare(1) --user --pid --fork --mount-proc --map-root-user` as a
+prefix to bwrap and it `EPERM`s on `mount("proc")` for the same
+underlying reason: kernel-locked parent mount.
+
+Implication for the threat model: this is **information disclosure**
+(Claude can see the user's process tree and command lines), **not
+credential exfil**. The credential-bearing procfs entries —
+`/proc/<pid>/environ`, `/maps`, `/fd`, `/mem`, `/cwd` — are gated by
+`PTRACE_MODE_READ_FSCREDS`, which under YAMA `ptrace_scope=1` (the
+Ubuntu/Debian default and what every devcontainer base image ships)
+is restricted to the caller's descendants. The sandbox has no
+descendant relationship with VS Code, terminal sessions, or other
+devcontainer processes, so those reads `EACCES`.
+
+The launch-time probe in `claude-shadow` detects whether procfs is
+properly aligned with the new pidns (it tests `$$ ==
+/proc/self/status:Pid:` inside a probe bwrap) and exports
+`CLAUDE_SANDBOX_FRESH_PROC=0/1` accordingly. On hosts where it works
+(Linux desktops with full bwrap privileges) check 07 plus the
+process-tree view are both clean. On rootless devcontainers check 07
+still passes (kernel pidns isolation is intact) and a one-line
+warning is printed on stderr at launch.
 
 ## What's deliberately exposed
 
@@ -125,9 +162,31 @@ Claude. The deliberate exposures are:
   CLI's token store. Bound through for the same reason as `gh`.
   Sibling paths under `/root/.config/` (VS Code state, other cred
   helpers, etc.) are NOT bound — only these two subdirs.
+- **`/root/.local/share/uv/`** (read/write, if present) plus
+  **`/root/.local/bin/uv`** and **`/root/.local/bin/uvx`** (single
+  files, if present). uv-managed Python interpreters and the `uv` /
+  `uvx` tool binaries. Without these binds, a project's
+  `.venv/bin/python` symlink (which points into
+  `~/.local/share/uv/python/...`) resolves to nothing — `uv run`,
+  `python`, and any `.venv/bin/*` invocation fails. The whole
+  `~/.local/bin/` directory is NOT bound (Claude Code writes there
+  via tmpfs at runtime and we want those writes ephemeral) — only
+  `uv` and `uvx` individually. `$HOME/.local/bin` is appended to
+  PATH so `uv` resolves without a full path; appended, not
+  prepended, so a malicious binary in `~/.local/bin/<sysname>`
+  cannot hijack a standard command.
 - **Network** (`--share-net`). Claude needs to reach
   `api.anthropic.com` and (if you use them) GitHub / GitLab over
-  HTTPS.
+  HTTPS. Because the network namespace is shared with the host,
+  Claude can also enumerate the host's interface addresses, routing
+  table, and DNS resolver via `AF_NETLINK` / standard tooling
+  (`ip addr`, `ip route`, `/etc/resolv.conf`). This is
+  network-identity disclosure, not credential exfil — but it means
+  the sandbox is visible to internal services on the same host
+  network. Don't run a local `metadata-style` credential service on
+  the loopback or RFC1918 of a host that also runs `claude` unless
+  you're OK with Claude reaching it. /verify-sandbox flags this as
+  an `[INCONCLUSIVE]` adversarial probe so it stays on the radar.
 
 ## Workspace visibility caveat
 
@@ -150,7 +209,7 @@ From inside Claude, run:
 /verify-sandbox
 ```
 
-The command runs 18 PASS/FAIL checks against the live process and
+The command runs 17 PASS/FAIL checks against the live process and
 prints a summary table. Any FAIL exits the command non-zero (so
 you can use it as a CI assertion), and the FAIL line names which
 defence regressed.
@@ -158,14 +217,6 @@ defence regressed.
 A pre-prompt hook (`.claude/hooks/sandbox-check.sh`) runs a
 sub-second subset of these checks before every prompt and blocks
 the prompt if the sandbox is not intact.
-
-From a shell:
-
-```
-claude-sandbox verify
-```
-
-Same 18-check spec, same exit code semantics.
 
 ## What's installed
 

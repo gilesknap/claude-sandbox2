@@ -185,3 +185,46 @@ def test_argv_omits_claude_json_bind_when_absent(tmp_path) -> None:
     (tmp_path / ".claude").mkdir()
     argv = _run_builder(home=str(tmp_path))
     assert f"{tmp_path}/.claude.json" not in argv
+
+
+def test_argv_binds_uv_when_present(tmp_path) -> None:
+    """uv-managed Python interpreters at ~/.local/share/uv plus the
+    `uv` / `uvx` tool binaries at ~/.local/bin must be bound through
+    the strict-/root inversion. Without these binds the project's
+    `.venv/bin/python` symlink resolves to nothing inside the sandbox
+    and any `uv run` / `.venv/bin/*` invocation fails.
+    """
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".local" / "share" / "uv").mkdir(parents=True)
+    (tmp_path / ".local" / "bin").mkdir(parents=True)
+    (tmp_path / ".local" / "bin" / "uv").touch()
+    (tmp_path / ".local" / "bin" / "uvx").touch()
+    argv = _run_builder(home=str(tmp_path))
+    assert f"{tmp_path}/.local/share/uv" in argv
+    assert f"{tmp_path}/.local/bin/uv" in argv
+    assert f"{tmp_path}/.local/bin/uvx" in argv
+    # PATH must append $HOME/.local/bin (after system paths, never before).
+    assert f":{tmp_path}/.local/bin" in argv
+
+
+def test_argv_omits_uv_binds_when_absent(tmp_path) -> None:
+    """When the host has no uv installed, the binds must be absent —
+    otherwise bwrap would fail to launch on a non-uv host."""
+    (tmp_path / ".claude").mkdir()
+    argv = _run_builder(home=str(tmp_path))
+    assert f"{tmp_path}/.local/share/uv" not in argv
+    assert f"{tmp_path}/.local/bin/uv" not in argv
+
+
+def test_argv_does_not_bind_other_local_bin_entries(tmp_path) -> None:
+    """Only `uv` / `uvx` are explicitly bound under ~/.local/bin.
+    Other binaries the user has installed there (cargo-installed
+    tools, pipx envs, etc.) stay invisible — otherwise we'd be
+    re-exposing the whole ~/.local/bin tree."""
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".local" / "bin").mkdir(parents=True)
+    (tmp_path / ".local" / "bin" / "cargo-something").touch()
+    (tmp_path / ".local" / "bin" / "pipx").touch()
+    argv = _run_builder(home=str(tmp_path))
+    assert f"{tmp_path}/.local/bin/cargo-something" not in argv
+    assert f"{tmp_path}/.local/bin/pipx" not in argv

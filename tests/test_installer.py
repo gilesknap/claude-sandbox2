@@ -26,7 +26,7 @@ def test_dry_run_returns_plan_without_touching_disk(
     plan = installer.install(workspace=tmp_path / "ws", dry_run=True)
     assert isinstance(plan, DryRunPlan)
 
-    # Every container target the PRD calls out must be in the plan.
+    # Every required container target must be in the plan.
     container_targets = {p for p, _ in plan.container_files}
     assert installer.SHADOW_CLAUDE_PATH in container_targets
     assert installer.SHADOW_CLI_PATH in container_targets

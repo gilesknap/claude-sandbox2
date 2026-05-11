@@ -29,7 +29,6 @@ runner = CliRunner()
     "subcmd",
     [
         "install",
-        "verify",
         "upgrade",
         "list-skills",
         "list-commands",

@@ -150,6 +150,25 @@ ARGV3e="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
 set -e
 assert_contains scenario3e "$ARGV3e" "$TMPHOME/.claude.json"
 
+# --- Scenario 3f: uv-managed pythons and `uv`/`uvx` binaries bound back ---
+# Without ~/.local/share/uv the project's .venv/bin/python symlink
+# resolves to nothing inside the sandbox. The uv/uvx binaries live
+# at ~/.local/bin and are bound individually (not the whole bin/
+# dir — Claude Code also writes into ~/.local/bin via tmpfs and we
+# don't want those writes to leak back to the host).
+mkdir -p "$TMPHOME/.local/share/uv" "$TMPHOME/.local/bin"
+touch "$TMPHOME/.local/bin/uv" "$TMPHOME/.local/bin/uvx"
+set +e
+ARGV3f="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
+    bwrap_argv_build "$TMPHOME" /opt/claude/bin/claude)"
+set -e
+assert_contains scenario3f "$ARGV3f" "$TMPHOME/.local/share/uv"
+assert_contains scenario3f "$ARGV3f" "$TMPHOME/.local/bin/uv"
+assert_contains scenario3f "$ARGV3f" "$TMPHOME/.local/bin/uvx"
+# PATH must include $HOME/.local/bin so `uv` resolves without a full path.
+assert_contains scenario3f "$ARGV3f" \
+    "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$TMPHOME/.local/bin"
+
 # --- Scenario 4: CLAUDE_SANDBOX_FRESH_PROC=0 swaps --proc for --ro-bind /proc ---
 # Triggered by the shadow's launch-time probe when seccomp blocks
 # mount(proc) (typical of nested podman/docker on RHEL). The fallback

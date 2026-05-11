@@ -100,8 +100,7 @@ def install(workspace: Path | None = None, *, dry_run: bool = False) -> DryRunPl
     print(
         f"claude-sandbox: install complete in {workspace}\n"
         f"  - run 'claude' (shadow at {SHADOW_CLAUDE_PATH}) to start a sandboxed session\n"
-        f"  - run '/verify-sandbox' inside Claude (or 'claude-sandbox verify') to "
-        f"confirm the 18-check battery"
+        f"  - run '/verify-sandbox' inside Claude to confirm the 17-check battery"
     )
     return None
 
