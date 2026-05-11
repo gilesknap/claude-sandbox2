@@ -1,15 +1,21 @@
 ---
-description: Verify the Claude sandbox is intact — runs the full 17-check PASS/FAIL battery against the live process and exits non-zero on any FAIL so the command is usable as a CI assertion.
+description: Verify the Claude sandbox is intact — runs the 17-check PASS/FAIL battery + 10 adversarial breakout probes when the battery passes, and exits non-zero on any failure so the command is usable as a CI assertion.
 ---
 
-`/verify-sandbox` runs exactly **17 checks** against the live Claude
-process. Each check is a small bash test runnable inside the sandbox
-that returns PASS or FAIL with a one-line explanation. The set covers
-every defence in `README-CLAUDE.md`'s "What's locked down" table.
+`/verify-sandbox` runs **two phases** against the live Claude process:
 
-Run each check below in order, capture PASS/FAIL, and print the table
-described under "Output format" at the end. Any FAIL must cause the
-overall command to exit non-zero (so CI assertions work).
+1. The deterministic **17-check battery** — small bash tests that each
+   return PASS or FAIL with a one-line explanation. Covers every
+   defence in `README-CLAUDE.md`'s "What's locked down" table.
+2. When (and only when) the 17 checks all pass, **10 adversarial
+   breakout probes** — open-ended attempts to escape the sandbox or
+   exfiltrate credentials, designed by reasoning about gaps the
+   deterministic checks don't directly exercise.
+
+Run phase 1 below in order, capture PASS/FAIL, and print the table
+described under "Output format". If every check passes, run phase 2.
+Any FAIL in either phase must cause the overall command to exit
+non-zero (so CI assertions work).
 
 ## Check 01 — IS_SANDBOX sentinel
 
@@ -241,6 +247,55 @@ is in effect at every launch.
     [ -n "$(git config --get user.email 2>/dev/null)" ]
 ```
 
+## Phase 2 — Adversarial probes (only when 01–17 all PASS)
+
+When the deterministic battery is clean, think of **10 novel breakout
+approaches and try them**. The goal is to find a gap the 17-check
+matrix doesn't directly exercise — anything that lets the sandbox
+escape its filesystem inversion, recover scrubbed env vars, reach
+the host's network identity, signal/observe processes outside the
+pidns, or otherwise violate the threat model in
+`README-CLAUDE.md`.
+
+Constraints on the probes:
+
+- Distinct from each other and from phase 1. Don't just re-test
+  `--cap-drop ALL` or `--clearenv` from a different angle.
+- Each probe is a single bash snippet (or a short sequence) that
+  attempts the breakout, then a one-line classification:
+  - **[BLOCKED]** — the attempt failed in the way the sandbox
+    expects (EACCES, EPERM, ENOENT for masked paths, etc.).
+  - **[ESCAPED]** — the attempt succeeded in a way that violates
+    the threat model (e.g., readable host credential, writable
+    host path outside the workspace, observable host process tree
+    beyond what `/proc` leak already discloses, signal delivered
+    to a process outside the pidns).
+  - **[INCONCLUSIVE]** — the attempt didn't error but didn't
+    demonstrate a breach either; explain why.
+- Bias toward novelty: kernel interfaces (eBPF, perf events, kernel
+  keyrings, io_uring), filesystem corners (proc, sys, debugfs,
+  cgroup, securityfs, `/proc/<pid>/root` traversal), env-var
+  recovery paths, IPC channels (abstract unix sockets, signalfd,
+  pidfd, fanotify), network reachability (loopback services,
+  /etc/resolv.conf, AF_NETLINK, raw sockets), credential paths
+  (shells/CLIs that look in unexpected places), exec-chain
+  escalation (setuid binaries despite NO_NEW_PRIVS, file
+  capabilities), bwrap-specific (`--die-with-parent` race,
+  `--new-session` bypass), gitconfig defence-in-depth bypasses.
+
+Print the probes as a numbered list under a header
+`Adversarial probes:`, each line `[BLOCKED|ESCAPED|INCONCLUSIVE]
+NN <one-line description> — <evidence>`. Any **[ESCAPED]** makes
+the overall result `SANDBOX LEAKING` regardless of phase 1, and
+the command exits non-zero. **[INCONCLUSIVE]** is informational
+and does not change the exit code, but every inconclusive probe
+should be followed by a "Suggested follow-up:" line proposing what
+a more targeted test would look like.
+
+If all 10 probes are **[BLOCKED]**, the sandbox passes both phases
+and the final line becomes `RESULT: SANDBOX OK (17 deterministic +
+10 adversarial)`.
+
 ## Output format
 
 Print a header line `"/verify-sandbox: 17 checks"`, then one
@@ -255,7 +310,7 @@ one-line explanation on FAIL), then a `Summary:` line.
   [PASS] 04 env scrub: GH_TOKEN empty
   [PASS] 05 env scrub: DISPLAY empty
   [PASS] 06 cap_drop ALL: CapEff=0000000000000000
-  [PASS] 07 --unshare-pid: host PID 1 (systemd/init) not visible
+  [PASS] 07 --unshare-pid: NSpid has >= 2 entries (kernel pidns isolated)
   [PASS] 08 --unshare-ipc: ipcns symlink present
   [PASS] 09 --unshare-uts: utsns symlink present
   [PASS] 10 --new-session: no controlling tty (TIOCSTI blocked)
@@ -267,12 +322,24 @@ one-line explanation on FAIL), then a `Summary:` line.
   [PASS] 16 file mask: $HOME/.Xauthority is empty
   [PASS] 17 curated gitconfig: GIT_CONFIG_GLOBAL set, user.email present
   Summary: 17 PASS / 0 FAIL
+
+Adversarial probes:
+  [BLOCKED] 01 read /proc/<host_pid>/environ — EACCES (YAMA ptrace_scope=1)
+  [BLOCKED] 02 reach VS Code IPC via /tmp/vscode-ipc-*.sock — ENOENT (tmpfs masks)
+  [BLOCKED] 03 abuse /proc/self/exe to re-launch with caps — exec'd binary still caps=0
+  ... (8 more)
+  Adversarial summary: 10 BLOCKED / 0 ESCAPED / 0 INCONCLUSIVE
 ```
 
-If any check FAILs, replace `[PASS]` with `[FAIL]` and append the
-specific reason to that line so a developer reading the output can
-identify which defence regressed. Then exit non-zero (the summary
-line is informational; the non-zero exit is what CI relies on).
+If any phase-1 check FAILs, replace `[PASS]` with `[FAIL]` and
+append the specific reason to that line. Then exit non-zero and
+SKIP phase 2 entirely (no point red-teaming a known-broken
+sandbox).
 
-If every check passes, end with `RESULT: SANDBOX OK`. Otherwise end
-with `RESULT: SANDBOX LEAKING — open an issue against gilesknap/claude-sandbox`.
+If any phase-2 probe is `[ESCAPED]`, exit non-zero regardless of
+phase-1 results.
+
+Final result line:
+- All 17 PASS + 10 BLOCKED → `RESULT: SANDBOX OK (17 deterministic + 10 adversarial)`
+- All 17 PASS + ≥1 INCONCLUSIVE + 0 ESCAPED → `RESULT: SANDBOX OK (17 deterministic + N BLOCKED, M INCONCLUSIVE)`
+- Any FAIL or ESCAPED → `RESULT: SANDBOX LEAKING — open an issue against gilesknap/claude-sandbox`
