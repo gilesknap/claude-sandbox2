@@ -59,16 +59,26 @@ assert_contains scenario1 "$ARGV1" "bwrap"
 assert_contains scenario1 "$ARGV1" "--ro-bind"
 assert_contains scenario1 "$ARGV1" "--cap-drop"
 assert_contains scenario1 "$ARGV1" "ALL"
+assert_contains scenario1 "$ARGV1" "--unshare-user-try"
 assert_contains scenario1 "$ARGV1" "--unshare-pid"
 assert_contains scenario1 "$ARGV1" "--unshare-ipc"
 assert_contains scenario1 "$ARGV1" "--unshare-uts"
 assert_contains scenario1 "$ARGV1" "--new-session"
 assert_contains scenario1 "$ARGV1" "--die-with-parent"
 assert_contains scenario1 "$ARGV1" "--clearenv"
-assert_contains scenario1 "$ARGV1" "/run/secrets"
+# The /run/secrets mask is now conditional on the host having
+# /run/secrets — bwrap can't mkdir into a read-only /run when the
+# parent has no such subdir. We check both branches behaviourally.
+if [ -d /run/secrets ]; then
+    assert_contains scenario1 "$ARGV1" "/run/secrets"
+else
+    assert_not_contains scenario1 "$ARGV1" "/run/secrets"
+fi
 assert_contains scenario1 "$ARGV1" "IS_SANDBOX"
 assert_contains scenario1 "$ARGV1" "/etc/claude-gitconfig"
 assert_contains scenario1 "$ARGV1" "/opt/claude/bin/claude"
+# Default mode mounts a fresh procfs; the bind-/proc fallback is off.
+assert_contains scenario1 "$ARGV1" "--proc"
 
 # --- Scenario 2: workspace at an unusual path ---
 
@@ -105,6 +115,28 @@ ARGV3b="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
 set -e
 assert_contains scenario3b "$ARGV3b" "$TMPHOME/.claude"
 assert_contains scenario3b "$ARGV3b" "$TMPHOME/.cache"
+
+# --- Scenario 4: CLAUDE_SANDBOX_FRESH_PROC=0 swaps --proc for --ro-bind /proc ---
+# Triggered by the shadow's launch-time probe when seccomp blocks
+# mount(proc) (typical of nested podman/docker on RHEL). The fallback
+# loses pid-namespace isolation in the procfs view but keeps the rest
+# of the sandbox functional.
+
+set +e
+ARGV4="$(HOME=/root CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
+    CLAUDE_SANDBOX_FRESH_PROC=0 \
+    bwrap_argv_build /workspaces/foo /opt/claude/bin/claude)"
+set -e
+# In degraded mode the fresh-proc mount is gone and the bind-/proc pair
+# is present. grep -A1 matches the line *after* the flag so we assert
+# the pair as a unit, not as two unrelated tokens.
+if printf '%s\n' "$ARGV4" | grep -A1 '^--ro-bind$' | grep -qx '/proc'; then
+    PASSED=$((PASSED+1))
+else
+    FAILED=$((FAILED+1))
+    echo "FAIL: scenario4 — expected --ro-bind /proc /proc fallback pair" >&2
+fi
+assert_not_contains scenario4 "$ARGV4" "--proc"
 
 echo "bwrap_argv.sh: $PASSED passed / $FAILED failed"
 [ "$FAILED" -eq 0 ]

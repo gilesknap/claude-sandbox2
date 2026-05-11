@@ -23,6 +23,28 @@ fi
 export CLAUDE_SANDBOX_GITCONFIG_PATH="${CLAUDE_SANDBOX_GITCONFIG_PATH:-@@GITCONFIG_PATH@@}"
 
 SRC_DIR="${CLAUDE_SANDBOX_SRC_DIR:-@@SRC_DIR@@}"
+
+# Some nested-container environments (e.g. podman/docker on RHEL with
+# strict seccomp) deny mount("proc") even from inside a fresh user+pid
+# namespace. Probe once per launch: if bwrap can mount a fresh procfs
+# we keep the default secure mode; otherwise we fall back to a read-only
+# bind of the host /proc and warn. CLAUDE_SANDBOX_FRESH_PROC=0/1 set on
+# the parent shell short-circuits the probe (useful for tests and for
+# users who already know their host's behaviour). The probe takes
+# ~15 ms on a warm cache — well under the 50 ms launch budget.
+if [ -z "${CLAUDE_SANDBOX_FRESH_PROC:-}" ]; then
+    if bwrap --ro-bind / / --unshare-user-try --unshare-pid --proc /proc \
+            -- /bin/true >/dev/null 2>&1; then
+        export CLAUDE_SANDBOX_FRESH_PROC=1
+    else
+        export CLAUDE_SANDBOX_FRESH_PROC=0
+        echo "claude-sandbox: warning — kernel/seccomp denied mount(proc); falling " \
+             "back to --ro-bind /proc /proc. Host PIDs are read-only-visible inside " \
+             "the sandbox (verify-sandbox check 02/07 will reflect this). The rest " \
+             "of the sandbox is intact." >&2
+    fi
+fi
+
 # shellcheck source=bwrap_argv.sh
 source "$SRC_DIR/src/claude_sandbox/data/bwrap_argv.sh"
 
