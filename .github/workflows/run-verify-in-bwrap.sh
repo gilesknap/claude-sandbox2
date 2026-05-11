@@ -34,7 +34,10 @@ source "$ARGV_SH"
 # The inner exec runs the verifier from the synced project venv.
 # bash -lc is needed because /opt/claude/bin/claude is bash; the -lc
 # string is what bash actually executes.
-INNER="exec '$REPO/.venv/bin/claude-sandbox' verify --workspace '$REPO'"
+# The leading ls -lA dump exists so a Check 03 failure on CI surfaces
+# what's actually under $HOME inside the sandbox — the spec only
+# accepts .claude and .cache, and silent failures are hard to debug.
+INNER="echo '--- HOME contents inside sandbox ---'; ls -lA \"\$HOME\"; echo '--- HOME path:' \"\$HOME\"; exec '$REPO/.venv/bin/claude-sandbox' verify --workspace '$REPO'"
 
 # Build the argv. Workspace bind = the repo (so the verifier finds
 # .claude/commands/verify-sandbox.md and the venv).
