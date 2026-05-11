@@ -48,6 +48,28 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends \
               bubblewrap git ca-certificates curl jq
+      - name: Allow unprivileged userns on Ubuntu 24.04
+        # Ubuntu 24.04 ships an AppArmor restriction
+        # (kernel.apparmor_restrict_unprivileged_userns=1) that blocks
+        # bwrap's user namespace setup with "setting up uid map: Permission
+        # denied". Devcontainer hosts disable this; CI runners need it
+        # toggled explicitly. We also drop a permissive AppArmor profile
+        # for /usr/bin/bwrap so the kernel restriction can't bite even
+        # if the sysctl path moves between Ubuntu releases.
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo tee /etc/apparmor.d/bwrap >/dev/null <<'PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+            include if exists <local/bwrap>
+          }
+          PROFILE
+          sudo systemctl reload apparmor || sudo apparmor_parser -r /etc/apparmor.d/bwrap || true
+          # Smoke-test that bwrap can now create a userns; surface a
+          # clear failure here rather than a confusing one further down.
+          bwrap --unshare-user --unshare-pid --tmpfs /tmp -- true
       - name: Set up uv
         uses: astral-sh/setup-uv@v3
         with:
