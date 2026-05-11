@@ -118,12 +118,7 @@ def test_merge_file_jsonc_with_line_comments(tmp_path: Path) -> None:
     Regression: a fully-commented-out file used to blow up `json.loads`.
     """
     settings = tmp_path / "settings.json"
-    settings.write_text(
-        "// commented header\n"
-        "{\n"
-        '  "env": {"FOO": "bar"} // trailing comment\n'
-        "}\n"
-    )
+    settings.write_text('// commented header\n{\n  "env": {"FOO": "bar"} // trailing comment\n}\n')
     merged = merge_file(settings, OUR_HOOK_BLOCK)
     assert merged["env"] == {"FOO": "bar"}
     assert merged["hooks"]["UserPromptSubmit"] == [OUR_HOOK_BLOCK]
@@ -131,7 +126,7 @@ def test_merge_file_jsonc_with_line_comments(tmp_path: Path) -> None:
 
 def test_merge_file_fully_commented_out_treated_as_empty(tmp_path: Path) -> None:
     settings = tmp_path / "settings.json"
-    settings.write_text("// {\n//   \"hooks\": { }\n// }\n")
+    settings.write_text('// {\n//   "hooks": { }\n// }\n')
     merged = merge_file(settings, OUR_HOOK_BLOCK)
     assert merged == {"hooks": {"UserPromptSubmit": [OUR_HOOK_BLOCK]}}
 
@@ -139,13 +134,7 @@ def test_merge_file_fully_commented_out_treated_as_empty(tmp_path: Path) -> None
 def test_merge_file_block_comments_and_strings_with_slashes(tmp_path: Path) -> None:
     """A `//` inside a string value must survive the comment stripper."""
     settings = tmp_path / "settings.json"
-    settings.write_text(
-        "{\n"
-        "  /* block\n"
-        "     comment */\n"
-        '  "url": "https://example.com/path"\n'
-        "}\n"
-    )
+    settings.write_text('{\n  /* block\n     comment */\n  "url": "https://example.com/path"\n}\n')
     merged = merge_file(settings, OUR_HOOK_BLOCK)
     assert merged["url"] == "https://example.com/path"
 

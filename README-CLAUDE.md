@@ -162,6 +162,19 @@ Claude. The deliberate exposures are:
   CLI's token store. Bound through for the same reason as `gh`.
   Sibling paths under `/root/.config/` (VS Code state, other cred
   helpers, etc.) are NOT bound — only these two subdirs.
+- **`/root/.local/share/uv/`** (read/write, if present) plus
+  **`/root/.local/bin/uv`** and **`/root/.local/bin/uvx`** (single
+  files, if present). uv-managed Python interpreters and the `uv` /
+  `uvx` tool binaries. Without these binds, a project's
+  `.venv/bin/python` symlink (which points into
+  `~/.local/share/uv/python/...`) resolves to nothing — `uv run`,
+  `python`, and any `.venv/bin/*` invocation fails. The whole
+  `~/.local/bin/` directory is NOT bound (Claude Code writes there
+  via tmpfs at runtime and we want those writes ephemeral) — only
+  `uv` and `uvx` individually. `$HOME/.local/bin` is appended to
+  PATH so `uv` resolves without a full path; appended, not
+  prepended, so a malicious binary in `~/.local/bin/<sysname>`
+  cannot hijack a standard command.
 - **Network** (`--share-net`). Claude needs to reach
   `api.anthropic.com` and (if you use them) GitHub / GitLab over
   HTTPS. Because the network namespace is shared with the host,
