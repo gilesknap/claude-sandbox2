@@ -52,6 +52,33 @@ fi
 # is sub-ms and idempotent; the dirs persist in the container fs.
 mkdir -p "${HOME:-/root}/.config/gh" "${HOME:-/root}/.config/glab-cli"
 
+# Refresh /etc/claude-gitconfig from the current host git identity on
+# every launch. Late-bind by design: at postCreate time (when
+# `bash install` ran gitconfig.generate) VS Code's
+# dev.containers.copyGitConfig may not yet have populated
+# /root/.gitconfig, so the curated config can end up with empty
+# user.name / user.email and Claude's commits land unattributed. By
+# the time the user types `claude`, copyGitConfig has long since
+# fired — re-render here so the [user] block always reflects the host
+# identity copyGitConfig copied in. ~5 ms; under the 50 ms launch
+# budget.
+#
+# Template MUST MATCH src/claude_sandbox/gitconfig.py::render. If you
+# change one, change the other (and tests/test_gitconfig.py).
+git_name=$(git config --get user.name 2>/dev/null || true)
+git_email=$(git config --get user.email 2>/dev/null || true)
+cat > "$CLAUDE_SANDBOX_GITCONFIG_PATH" <<EOF
+[user]
+    name = $git_name
+    email = $git_email
+[credential "https://github.com"]
+    helper = !gh auth git-credential
+[init]
+    defaultBranch = main
+[safe]
+    directory = *
+EOF
+
 # Same reasoning for ~/.claude.json: Claude Code writes its OAuth token
 # and recent-projects state into a top-level *file* (not under the
 # bound ~/.claude/ directory). Pre-creating it lets the argv builder's
