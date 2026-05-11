@@ -164,7 +164,16 @@ Claude. The deliberate exposures are:
   helpers, etc.) are NOT bound — only these two subdirs.
 - **Network** (`--share-net`). Claude needs to reach
   `api.anthropic.com` and (if you use them) GitHub / GitLab over
-  HTTPS.
+  HTTPS. Because the network namespace is shared with the host,
+  Claude can also enumerate the host's interface addresses, routing
+  table, and DNS resolver via `AF_NETLINK` / standard tooling
+  (`ip addr`, `ip route`, `/etc/resolv.conf`). This is
+  network-identity disclosure, not credential exfil — but it means
+  the sandbox is visible to internal services on the same host
+  network. Don't run a local `metadata-style` credential service on
+  the loopback or RFC1918 of a host that also runs `claude` unless
+  you're OK with Claude reaching it. /verify-sandbox flags this as
+  an `[INCONCLUSIVE]` adversarial probe so it stays on the radar.
 
 ## Workspace visibility caveat
 

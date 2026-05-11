@@ -109,12 +109,18 @@ bwrap_argv_build() {
     # Defence-in-depth file masks. Strict-under-/root already hides the
     # dotfiles under $HOME, but masking them with /dev/null is free,
     # explicit, and survives if the strict-root bind ever regresses.
-    # /etc/gitconfig is masked unconditionally — it lives outside the
-    # inversion. --bind-try keeps the argv valid on hosts where the
-    # source path doesn't exist.
+    # /etc/gitconfig, /etc/shadow, and /etc/sudoers live outside the
+    # inversion and are masked unconditionally. /etc/shadow leaks the
+    # host user list (and password hashes on hosts where users have
+    # passwords); /etc/sudoers leaks the sudo policy. Both are
+    # information-disclosure rather than credential exfil under
+    # cap-drop ALL + NO_NEW_PRIVS, but masking is free. --bind-try
+    # keeps the argv valid on hosts where the source path doesn't
+    # exist.
     local mask
     for mask in "$home/.gitconfig" /etc/gitconfig "$home/.netrc" \
-                "$home/.Xauthority" "$home/.ICEauthority"; do
+                "$home/.Xauthority" "$home/.ICEauthority" \
+                /etc/shadow /etc/gshadow /etc/sudoers; do
         argv+=( --bind-try /dev/null "$mask" )
     done
 
