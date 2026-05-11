@@ -112,6 +112,8 @@ assert_not_contains scenario3a "$ARGV3a" "$TMPHOME/.cache"
 # failure.
 assert_not_contains scenario3a "$ARGV3a" "$TMPHOME/.config/gh"
 assert_not_contains scenario3a "$ARGV3a" "$TMPHOME/.config/glab-cli"
+# .claude.json missing -> bind must be absent (same reasoning).
+assert_not_contains scenario3a "$ARGV3a" "$TMPHOME/.claude.json"
 
 mkdir -p "$TMPHOME/.cache"
 set +e
@@ -137,6 +139,16 @@ ARGV3d="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
     bwrap_argv_build "$TMPHOME" /opt/claude/bin/claude)"
 set -e
 assert_not_contains scenario3d "$ARGV3d" "$TMPHOME/.config/Code"
+
+# --- Scenario 3e: ~/.claude.json present is bound back ---
+# Without this bind the strict-under-/root tmpfs would swallow Claude
+# Code's OAuth token on every launch.
+touch "$TMPHOME/.claude.json"
+set +e
+ARGV3e="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
+    bwrap_argv_build "$TMPHOME" /opt/claude/bin/claude)"
+set -e
+assert_contains scenario3e "$ARGV3e" "$TMPHOME/.claude.json"
 
 # --- Scenario 4: CLAUDE_SANDBOX_FRESH_PROC=0 swaps --proc for --ro-bind /proc ---
 # Triggered by the shadow's launch-time probe when seccomp blocks

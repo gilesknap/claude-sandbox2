@@ -52,6 +52,15 @@ fi
 # is sub-ms and idempotent; the dirs persist in the container fs.
 mkdir -p "${HOME:-/root}/.config/gh" "${HOME:-/root}/.config/glab-cli"
 
+# Same reasoning for ~/.claude.json: Claude Code writes its OAuth token
+# and recent-projects state into a top-level *file* (not under the
+# bound ~/.claude/ directory). Pre-creating it lets the argv builder's
+# `--bind` succeed on the very first launch — without this the
+# strict-under-/root tmpfs swallows the auth and the user re-logs in
+# on every invocation. `touch` on an existing file is a no-op apart
+# from mtime.
+touch "${HOME:-/root}/.claude.json"
+
 # shellcheck source=bwrap_argv.sh
 source "$SRC_DIR/src/claude_sandbox/data/bwrap_argv.sh"
 

@@ -74,6 +74,15 @@ bwrap_argv_build() {
     if [ -d "$home/.claude" ]; then
         argv+=( --bind "$home/.claude" "$home/.claude" )
     fi
+    # Claude Code stores account state (OAuth token, recent-projects
+    # list, settings) in ~/.claude.json — a top-level *file*, not under
+    # the ~/.claude/ directory. Without this bind the file lives in the
+    # in-sandbox tmpfs, so every fresh `claude` launch starts unauth'd.
+    # Shadow pre-creates the file before launch so a first-time login
+    # has somewhere to write.
+    if [ -f "$home/.claude.json" ]; then
+        argv+=( --bind "$home/.claude.json" "$home/.claude.json" )
+    fi
     if [ -d "$home/.cache" ]; then
         argv+=( --bind "$home/.cache" "$home/.cache" )
     fi

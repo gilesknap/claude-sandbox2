@@ -37,22 +37,23 @@ esac
 
 ## Check 03 — strict-under-/root
 
-`$HOME` (typically `/root`) is a tmpfs with only `.claude` and
-(optionally) `.cache` bound back in, plus a `.config` intermediate
-tmpfs that holds the `gh` / `glab-cli` credential binds. The
-defence-in-depth file masks (checks 15–17) also bind `/dev/null` over
-`.gitconfig`, `.netrc`, `.Xauthority`, and `.ICEauthority` — so those
-names are expected to appear too, as size-zero entries (which checks
-15–17 verify). Anything else under `$HOME`, or anything besides
+`$HOME` (typically `/root`) is a tmpfs with only `.claude`,
+`.claude.json` (Claude Code's account state), and (optionally)
+`.cache` bound back in, plus a `.config` intermediate tmpfs that holds
+the `gh` / `glab-cli` credential binds. The defence-in-depth file
+masks (checks 15–17) also bind `/dev/null` over `.gitconfig`,
+`.netrc`, `.Xauthority`, and `.ICEauthority` — so those names are
+expected to appear too, as size-zero entries (which checks 15–17
+verify). Anything else under `$HOME`, or anything besides
 `gh` / `glab-cli` under `$HOME/.config`, means the strict-under-/root
 inversion regressed.
 
 ```bash
 # ls -A skips . and ..; the allowed top-level entries are the
-# .claude/.cache binds, the .config intermediate tmpfs for the
-# selectively-exposed gh/glab binds, and the four masked dotfiles
-# intentionally bound to /dev/null.
-extras="$(ls -A "$HOME" 2>/dev/null | grep -vxE '\.claude|\.cache|\.config|\.gitconfig|\.netrc|\.Xauthority|\.ICEauthority' || true)"
+# .claude/.cache binds, the .claude.json account-state bind, the
+# .config intermediate tmpfs for the selectively-exposed gh/glab
+# binds, and the four masked dotfiles intentionally bound to /dev/null.
+extras="$(ls -A "$HOME" 2>/dev/null | grep -vxE '\.claude|\.claude\.json|\.cache|\.config|\.gitconfig|\.netrc|\.Xauthority|\.ICEauthority' || true)"
 [ -z "$extras" ] || exit 1
 # When .config is present (bwrap intermediate for the credential
 # binds), assert it contains only the trusted subdirs — anything else

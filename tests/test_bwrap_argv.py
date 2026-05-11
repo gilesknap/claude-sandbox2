@@ -163,3 +163,25 @@ def test_argv_does_not_bind_arbitrary_config_subdirs(tmp_path) -> None:
     argv = _run_builder(home=str(tmp_path))
     assert f"{tmp_path}/.config/Code" not in argv
     assert f"{tmp_path}/.config/git-credential-vscode" not in argv
+
+
+def test_argv_binds_claude_json_when_present(tmp_path) -> None:
+    """Claude Code's account-state file ~/.claude.json holds the OAuth
+    token. Without re-binding it through the strict-under-/root tmpfs,
+    every fresh `claude` launch starts unauth'd and the user re-logs in.
+    """
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude.json").touch()
+    argv = _run_builder(home=str(tmp_path))
+    assert f"{tmp_path}/.claude.json" in argv
+
+
+def test_argv_omits_claude_json_bind_when_absent(tmp_path) -> None:
+    """If the host has no ~/.claude.json yet (first-ever launch from a
+    raw container fs), the bind must be skipped — otherwise bwrap fails.
+    The shadow's `touch` pre-creates the file before launch so this
+    branch is unreachable in production, but the builder must stay
+    safe when called from tests / probes."""
+    (tmp_path / ".claude").mkdir()
+    argv = _run_builder(home=str(tmp_path))
+    assert f"{tmp_path}/.claude.json" not in argv

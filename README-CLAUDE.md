@@ -23,9 +23,9 @@ a UX failure mode that gets people pwned.
 - Host credentials reachable via `$HOME` dotfiles (`.gitconfig`,
   `.netrc`, `.Xauthority`, SSH keys, cloud SDK caches, etc.) —
   closed by strict-under-`/root` inversion: `--tmpfs /root` then
-  bind back only `.claude`, `.cache`, and the narrow forge-CLI
-  allowlist `.config/gh` / `.config/glab-cli` (see "What's
-  deliberately exposed").
+  bind back only `.claude`, `.claude.json`, `.cache`, and the narrow
+  forge-CLI allowlist `.config/gh` / `.config/glab-cli` (see
+  "What's deliberately exposed").
 - Host credentials reachable via environment variables (`GH_TOKEN`,
   `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`, `SSH_AUTH_SOCK`, …) — closed
   by `--clearenv` with an explicit allow-list.
@@ -75,7 +75,7 @@ or `claude-sandbox verify` from a shell, to verify them all).
 |---|---|---|
 | Sandbox is actually entered | `IS_SANDBOX=1` sentinel | check 01 |
 | bwrap is the parent process | `--unshare-pid` + exec | check 02 |
-| Strict-under-`/root` by inversion | `--tmpfs /root` then bind `.claude` / `.cache` / `.config/{gh,glab-cli}` | check 03 |
+| Strict-under-`/root` by inversion | `--tmpfs /root` then bind `.claude` / `.claude.json` / `.cache` / `.config/{gh,glab-cli}` | check 03 |
 | Host env vars scrubbed | `--clearenv` + explicit allow-list | checks 04, 05 |
 | Zero capabilities | `--cap-drop ALL` | check 06 |
 | PID namespace | `--unshare-pid` | check 07 |
@@ -108,6 +108,12 @@ Claude. The deliberate exposures are:
   `https://github.com`.
 - **`/root/.claude/`** (read/write). Claude's own state, settings,
   skills, and hooks.
+- **`/root/.claude.json`** (read/write). Claude Code's account-level
+  state file — OAuth token, recent-projects list, settings. A
+  top-level file rather than a directory, so it needs its own bind
+  on top of `~/.claude/`. Without this, the strict-under-/root tmpfs
+  would swallow the auth token on every launch and you'd re-login
+  on each invocation.
 - **`/root/.cache/`** (read/write, if present). Tool caches Claude
   needs across runs.
 - **`/root/.config/gh/`** (read/write, if present). The `gh` CLI's
