@@ -1,0 +1,16 @@
+# Changes here will be overwritten by Copier
+_commit: 5.1.0
+_src_path: https://github.com/diamondlightsource/python-copier-template
+author_email: giles.knap@diamond.ac.uk
+author_name: Giles Knap
+description: Claude devcontainer sandbox installer
+distribution_name: claude-sandbox
+docker: false
+docs_type: README
+git_platform: github.com
+github_org: gilesknap
+package_name: claude_sandbox
+pypi: false
+repo_name: claude-sandbox
+strict_typing: true
+type_checker: pyright

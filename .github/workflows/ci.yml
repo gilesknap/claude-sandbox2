@@ -1,35 +1,37 @@
-# CI for claude-sandbox.
-#
-# Lint + format check + the full pytest suite (which also runs the
-# bash bwrap_argv spec via test_bwrap_argv_bash.py). The unit tests
-# pin the bwrap argv flags, so a regression that strips e.g.
-# --unshare-pid from bwrap_argv.sh is caught at PR time without
-# needing a runtime bwrap integration job.
-#
-# Runtime verification is `/verify-sandbox` inside a real Claude
-# session — the spec lives at .claude/commands/verify-sandbox.md.
+name: CI
 
-name: ci
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+    tags:
+      - '*'
   pull_request:
 
 jobs:
-  pytest:
-    name: pytest + ruff
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          enable-cache: true
-      - name: Sync deps
-        run: uv sync --all-extras --dev
-      - name: ruff lint
-        run: uv run ruff check src/ tests/
-      - name: ruff format check
-        run: uv run ruff format --check src/ tests/
-      - name: pytest
-        run: uv run pytest -x
+
+  lint:
+    uses: ./.github/workflows/_tox.yml
+    with:
+      tox: pre-commit,type-checking
+
+  test:
+    strategy:
+      matrix:
+        runs-on: ["ubuntu-latest"] # can add windows-latest, macos-latest
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+      fail-fast: false
+    uses: ./.github/workflows/_test.yml
+    with:
+      runs-on: ${{ matrix.runs-on }}
+      python-version: ${{ matrix.python-version }}
+
+  dist:
+    uses: ./.github/workflows/_dist.yml
+  
+  release:
+    needs: [dist, test]
+    if: github.ref_type == 'tag'
+    uses: ./.github/workflows/_release.yml
+    permissions:
+      contents: write

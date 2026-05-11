@@ -1,3 +1,8 @@
+[![CI](https://github.com/gilesknap/claude-sandbox/actions/workflows/ci.yml/badge.svg)](https://github.com/gilesknap/claude-sandbox/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/gilesknap/claude-sandbox/branch/main/graph/badge.svg)](https://codecov.io/gh/gilesknap/claude-sandbox)
+
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
+
 # claude-sandbox
 
 bwrap-isolated Claude Code for rootless-podman + Debian/Ubuntu
