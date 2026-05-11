@@ -27,9 +27,20 @@ from claude_sandbox.settings_merger import SettingsConflictError
 # parameterisation that hosts non-root + host-mode installs.
 SHADOW_CLAUDE_PATH = Path("/usr/local/bin/claude")
 SHADOW_CLI_PATH = Path("/usr/local/bin/claude-sandbox")
-REAL_CLAUDE_PATH = Path("/opt/claude/bin/claude")
 GITCONFIG_PATH = Path("/etc/claude-gitconfig")
-SRC_DIR_DEFAULT = Path("/opt/claude-sandbox-src")
+
+# The real Claude binary lives inside the clone tree at
+# <src_dir>/.runtime/claude (gitignored). Putting it under the clone
+# rather than /opt/ keeps the binary survivable across container
+# rebuilds when the clone is on a host-mounted volume, and the clone
+# already sits outside $HOME so the bwrap --tmpfs $HOME inversion
+# doesn't hide it — no extra binds required.
+REAL_CLAUDE_SUBPATH = Path(".runtime/claude")
+
+
+def real_claude_path(src_dir: Path) -> Path:
+    return src_dir / REAL_CLAUDE_SUBPATH
+
 
 OUR_HOOK_BLOCK = {
     "hooks": [
@@ -67,7 +78,7 @@ def install(
     """
     if workspace is None:
         workspace = Path.cwd()
-    src_dir = Path(os.environ.get("CLAUDE_SANDBOX_SRC_DIR") or SRC_DIR_DEFAULT)
+    src_dir = _resolve_src_dir_strict()
 
     if dry_run:
         return _plan(workspace, src_dir)
@@ -86,10 +97,10 @@ def install(
     # again to confirm.
     probe.bwrap_or_refuse()
 
-    # 4. Container-scoped artifacts. Order: real claude move first
+    # 4. Container-scoped artifacts. Order: real claude copy first
     # (we need to know where it is to bake the path into the shadow),
     # then shadow + cli + gitconfig.
-    place_real_claude()
+    place_real_claude(src_dir)
     place_shadow(src_dir)
     place_cli_shim(src_dir)
     write_gitconfig()
@@ -118,7 +129,7 @@ def _plan(workspace: Path, src_dir: Path) -> DryRunPlan:
     plan.container_files.append((SHADOW_CLAUDE_PATH, "claude-shadow (rendered)"))
     plan.container_files.append((SHADOW_CLI_PATH, "claude-sandbox CLI shim"))
     plan.container_files.append(
-        (REAL_CLAUDE_PATH, "real claude (moved from ~/.local/bin)")
+        (real_claude_path(src_dir), "real claude (copied from ~/.local/bin)")
     )
     plan.container_files.append((GITCONFIG_PATH, "curated gitconfig"))
 
@@ -176,20 +187,26 @@ def _resolve_real_claude_source() -> Path | None:
     return None
 
 
-def place_real_claude() -> None:
-    """Place the real Claude binary at /opt/claude/bin/claude.
+def place_real_claude(src_dir: Path) -> None:
+    """Place the real Claude binary at <src_dir>/.runtime/claude.
 
     The shadow at /usr/local/bin/claude must win on $PATH; parking the
-    real binary under /opt guarantees that even users with
-    ~/.local/bin on PATH hit the shadow first.
+    real binary under the clone tree (outside ~/.local/bin) guarantees
+    that even users with ~/.local/bin on PATH hit the shadow first.
+
+    Putting it under the clone rather than /opt/ also lets it survive
+    container rebuilds when the clone lives on a host-mounted volume
+    (typical for VS Code devcontainers), avoiding the 200+ MB
+    re-download Anthropic's installer triggers on every rebuild.
 
     Idempotent. Replaces the target if it's actually a shadow (a prior
     install that ran with a shadow already on $PATH could end up with
-    the shadow copied into REAL_CLAUDE_PATH; the shadow then execs
-    itself forever, hanging every launch).
+    the shadow copied to the destination; the shadow then execs itself
+    forever, hanging every launch).
     """
-    REAL_CLAUDE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if REAL_CLAUDE_PATH.is_file() and not _looks_like_shadow(REAL_CLAUDE_PATH):
+    dest = real_claude_path(src_dir)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.is_file() and not _looks_like_shadow(dest):
         return
 
     source = _resolve_real_claude_source()
@@ -197,11 +214,11 @@ def place_real_claude() -> None:
         return
 
     # Atomic via tmp + replace — never leave a half-written 200+ MB
-    # binary at REAL_CLAUDE_PATH if the copy is interrupted.
-    tmp = REAL_CLAUDE_PATH.with_name(REAL_CLAUDE_PATH.name + ".tmp")
+    # binary at the destination if the copy is interrupted.
+    tmp = dest.with_name(dest.name + ".tmp")
     shutil.copy2(str(source), str(tmp))
     tmp.chmod(0o755)
-    os.replace(str(tmp), str(REAL_CLAUDE_PATH))
+    os.replace(str(tmp), str(dest))
 
 
 def place_shadow(src_dir: Path) -> None:
@@ -212,7 +229,7 @@ def place_shadow(src_dir: Path) -> None:
     """
     template = _read_data_file("claude-shadow")
     rendered = (
-        template.replace("@@REAL_CLAUDE@@", str(REAL_CLAUDE_PATH))
+        template.replace("@@REAL_CLAUDE@@", str(real_claude_path(src_dir)))
         .replace("@@SRC_DIR@@", str(src_dir))
         .replace("@@GITCONFIG_PATH@@", str(GITCONFIG_PATH))
     )
@@ -221,7 +238,7 @@ def place_shadow(src_dir: Path) -> None:
 
 def place_cli_shim(src_dir: Path) -> None:
     """Write /usr/local/bin/claude-sandbox: a thin shim that re-execs
-    `uv run --project /opt/claude-sandbox-src claude-sandbox`.
+    `uv run --project <src_dir> claude-sandbox`.
 
     Distinct from the prior project's symlink-to-shadow trick: the CLI
     shim is its own thing; only the `claude` binary is shadowed.
@@ -322,6 +339,50 @@ def _atomic_write(path: Path, content: str, mode: int) -> None:
         with contextlib.suppress(OSError):
             os.unlink(tmp_name)
         raise
+
+
+def _resolve_src_dir_strict() -> Path:
+    """Find the cloned source tree. Order: $CLAUDE_SANDBOX_SRC_DIR, then
+    walk up from this module's file location.
+
+    The walk-up handles the common case: the `install` script always
+    exports `CLAUDE_SANDBOX_SRC_DIR=$SCRIPT_DIR` before re-execing into
+    the orchestrator, so env wins. The walk-up is the fallback for
+    pytest and ad-hoc `uv run claude-sandbox install` invocations from
+    within the checkout.
+
+    Raises FileNotFoundError if neither path resolves to a recognisable
+    claude-sandbox clone (a directory containing pyproject.toml AND
+    src/claude_sandbox/). This is the loud-fail end of the "moved /
+    deleted clone" scenario — we'd rather refuse install than bake a
+    bogus @@SRC_DIR@@ into the shadow.
+    """
+    env = os.environ.get("CLAUDE_SANDBOX_SRC_DIR")
+    if env:
+        candidate = Path(env)
+        if _looks_like_src_dir(candidate):
+            return candidate
+        raise FileNotFoundError(
+            f"CLAUDE_SANDBOX_SRC_DIR={env} is not a claude-sandbox clone "
+            f"(missing pyproject.toml or src/claude_sandbox/)."
+        )
+
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if _looks_like_src_dir(parent):
+            return parent
+
+    raise FileNotFoundError(
+        "could not locate the claude-sandbox source clone. Set "
+        "CLAUDE_SANDBOX_SRC_DIR or run `./install` from within the "
+        "cloned repository."
+    )
+
+
+def _looks_like_src_dir(path: Path) -> bool:
+    return (path / "pyproject.toml").is_file() and (
+        path / "src" / "claude_sandbox"
+    ).is_dir()
 
 
 def _resolve_repo_hook(src_dir: Path) -> Path:

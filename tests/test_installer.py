@@ -15,14 +15,30 @@ from claude_sandbox.installer import (
     SettingsConflictError,
     place_workspace_hook,
     place_workspace_settings,
+    real_claude_path,
 )
+
+
+def _stage_fake_clone(root: Path) -> Path:
+    """Create a minimal directory tree that `_resolve_src_dir_strict`
+    will accept as a claude-sandbox clone.
+
+    The strict check requires pyproject.toml + src/claude_sandbox/ to
+    exist. We don't need to populate them with anything — the installer
+    only checks for their presence when resolving src_dir.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "pyproject.toml").write_text("")
+    (root / "src" / "claude_sandbox").mkdir(parents=True)
+    return root
 
 
 def test_dry_run_returns_plan_without_touching_disk(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Dry-run must list every container + workspace target and never write."""
-    monkeypatch.setenv("CLAUDE_SANDBOX_SRC_DIR", str(tmp_path / "src"))
+    src = _stage_fake_clone(tmp_path / "src")
+    monkeypatch.setenv("CLAUDE_SANDBOX_SRC_DIR", str(src))
     plan = installer.install(workspace=tmp_path / "ws", dry_run=True)
     assert isinstance(plan, DryRunPlan)
 
@@ -30,7 +46,7 @@ def test_dry_run_returns_plan_without_touching_disk(
     container_targets = {p for p, _ in plan.container_files}
     assert installer.SHADOW_CLAUDE_PATH in container_targets
     assert installer.SHADOW_CLI_PATH in container_targets
-    assert installer.REAL_CLAUDE_PATH in container_targets
+    assert real_claude_path(src) in container_targets
     assert installer.GITCONFIG_PATH in container_targets
 
     # Workspace targets: settings.json + sandbox-check.sh hook.
@@ -51,6 +67,8 @@ def test_dry_run_carries_mount_scan_warnings(
     # output.
     from claude_sandbox import probe
 
+    src = _stage_fake_clone(tmp_path / "src")
+    monkeypatch.setenv("CLAUDE_SANDBOX_SRC_DIR", str(src))
     monkeypatch.setattr(
         probe, "mount_scan", lambda: ["claude-sandbox: warning — /kubeconfig"]
     )
@@ -118,7 +136,7 @@ def test_our_hook_block_is_correctly_shaped() -> None:
 # place_real_claude — shadow-at-target detection
 #
 # Regression: a previous installer run that found a shadow on $PATH could
-# copy the shadow itself into REAL_CLAUDE_PATH; the shadow then exec'd
+# copy the shadow itself into the destination; the shadow then exec'd
 # itself in an infinite loop on every launch (issue #N). place_real_claude
 # must (a) recognise a shadow parked at the target and replace it, and
 # (b) never copy a shadow as the "real" binary in the first place.
@@ -149,18 +167,19 @@ def test_looks_like_shadow_rejects_real_binary(tmp_path: Path) -> None:
 def test_place_real_claude_replaces_shadow_at_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """If REAL_CLAUDE_PATH already holds a shadow, replace it from resolved source."""
-    target = tmp_path / "opt" / "claude" / "bin" / "claude"
+    """If the destination already holds a shadow, replace it from resolved source."""
+    src_dir = tmp_path / "clone"
+    src_dir.mkdir()
+    target = real_claude_path(src_dir)
     target.parent.mkdir(parents=True)
     target.write_text(_shadow_text())
     target.chmod(0o755)
-    monkeypatch.setattr(installer, "REAL_CLAUDE_PATH", target)
 
     source = tmp_path / "real-claude"
     source.write_bytes(_fake_real_binary_bytes())
     monkeypatch.setattr(installer, "_resolve_real_claude_source", lambda: source)
 
-    installer.place_real_claude()
+    installer.place_real_claude(src_dir)
 
     assert target.read_bytes() == _fake_real_binary_bytes()
     assert target.stat().st_mode & 0o777 == 0o755
@@ -170,17 +189,18 @@ def test_place_real_claude_is_noop_when_target_is_real(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An existing real binary at the target must be left alone (idempotency)."""
-    target = tmp_path / "opt" / "claude" / "bin" / "claude"
+    src_dir = tmp_path / "clone"
+    src_dir.mkdir()
+    target = real_claude_path(src_dir)
     target.parent.mkdir(parents=True)
     target.write_bytes(_fake_real_binary_bytes())
     target.chmod(0o755)
-    monkeypatch.setattr(installer, "REAL_CLAUDE_PATH", target)
 
     def _should_not_be_called() -> Path:
         raise AssertionError("_resolve_real_claude_source called on idempotent path")
 
     monkeypatch.setattr(installer, "_resolve_real_claude_source", _should_not_be_called)
-    installer.place_real_claude()
+    installer.place_real_claude(src_dir)
     assert target.read_bytes() == _fake_real_binary_bytes()
 
 

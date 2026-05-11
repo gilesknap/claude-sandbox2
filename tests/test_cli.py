@@ -20,6 +20,19 @@ from claude_sandbox.__main__ import app
 runner = CliRunner()
 
 
+def _stage_fake_clone(root: Path) -> Path:
+    """Minimal claude-sandbox clone layout for `_resolve_src_dir_strict`.
+
+    The installer's strict check requires pyproject.toml + src/claude_sandbox/
+    to exist at the resolved src_dir; tests stage these but don't need to
+    populate them with anything substantive.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "pyproject.toml").write_text("")
+    (root / "src" / "claude_sandbox").mkdir(parents=True)
+    return root
+
+
 # ---------------------------------------------------------------------------
 # --help for each subcommand: regression guard against accidental drops.
 # ---------------------------------------------------------------------------
@@ -78,7 +91,8 @@ def test_list_commands_against_repo_root(repo_root: Path) -> None:
 
 
 def test_install_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CLAUDE_SANDBOX_SRC_DIR", str(tmp_path / "src"))
+    src = _stage_fake_clone(tmp_path / "src")
+    monkeypatch.setenv("CLAUDE_SANDBOX_SRC_DIR", str(src))
     result = runner.invoke(
         app,
         ["install", "--workspace", str(tmp_path / "ws"), "--dry-run"],
@@ -235,7 +249,8 @@ def test_install_dry_run_then_real_paths_consistent(
     place_workspace_settings would actually write."""
     from claude_sandbox.installer import place_workspace_settings
 
-    monkeypatch.setenv("CLAUDE_SANDBOX_SRC_DIR", str(tmp_path / "src"))
+    src = _stage_fake_clone(tmp_path / "src")
+    monkeypatch.setenv("CLAUDE_SANDBOX_SRC_DIR", str(src))
     place_workspace_settings(tmp_path / "ws")
     text = (tmp_path / "ws" / ".claude" / "settings.json").read_text()
     parsed = json.loads(text)

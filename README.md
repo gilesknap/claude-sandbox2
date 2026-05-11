@@ -6,9 +6,9 @@
 # claude-sandbox
 
 bwrap-isolated Claude Code for rootless-podman + Debian/Ubuntu
-devcontainers. One curl-bash inside an attached devcontainer wraps
-your `claude` so a hostile prompt cannot reach host credentials, IDE
-bridges, or your shell environment.
+devcontainers. Clone the repo, run `./install`, and the shadow on
+`$PATH` wraps your `claude` so a hostile prompt cannot reach host
+credentials, IDE bridges, or your shell environment.
 
 > The project is currently published as `gilesknap/claude-sandbox2`
 > during the proving period. Once stable it reverts to the canonical
@@ -20,20 +20,28 @@ Inside any Debian/Ubuntu rootless-podman devcontainer (running as
 `root`):
 
 ```
-curl -fsSL https://raw.githubusercontent.com/gilesknap/claude-sandbox2/main/install | bash
+git clone https://github.com/gilesknap/claude-sandbox2.git
+cd claude-sandbox2
+./install
 ```
 
 That's it. The shadow `claude` on `$PATH` now wraps every invocation
 in `bwrap`. Run `/verify-sandbox` from inside Claude to confirm the
 17-check battery passes.
 
+The clone is a runtime dependency — the shadow sources its bwrap argv
+builder from the clone on every launch and execs the real Claude
+binary from `<clone>/.runtime/claude`. Keep the clone where you ran
+`./install`; if you move or delete it, the shadow fails loudly and
+you re-run `./install` from a fresh clone.
+
 ## What you get
 
 - A shadow `/usr/local/bin/claude` that auto-wraps the real Claude
-  binary in a `bwrap` sandbox (`--ro-bind / /` + `--tmpfs /root`,
-  `--clearenv`, `--cap-drop ALL`, `--unshare-pid/ipc/uts`,
-  `--new-session`, `/run/secrets` masked, `$HOME` dotfiles masked
-  with `/dev/null`).
+  binary (parked at `<clone>/.runtime/claude`) in a `bwrap` sandbox
+  (`--ro-bind / /` + `--tmpfs /root`, `--clearenv`, `--cap-drop ALL`,
+  `--unshare-pid/ipc/uts`, `--new-session`, `/run/secrets` masked,
+  `$HOME` dotfiles masked with `/dev/null`).
 - A typer CLI `claude-sandbox` with 7 commands (`install`, `verify`,
   `upgrade`, `list-skills`, `list-commands`, `install-skill`,
   `install-command`).
@@ -51,26 +59,22 @@ in `bwrap`. Run `/verify-sandbox` from inside Claude to confirm the
 
 ## Surviving devcontainer rebuilds
 
-Container-scoped artifacts (`/usr/local/bin/claude`, `/opt/claude/bin/claude`,
-`/etc/claude-gitconfig`) disappear on every rebuild. To re-establish
-them automatically, commit a 5-line bootstrap script and a
-1-line `postCreateCommand`:
+Container-scoped artifacts (`/usr/local/bin/claude`,
+`/etc/claude-gitconfig`) disappear on every rebuild. The real Claude
+binary at `<clone>/.runtime/claude` survives if the clone lives on a
+host-mounted volume (the default for VS Code devcontainers under
+`/workspaces/`).
 
-`.devcontainer/bootstrap.sh`:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-if ! command -v claude-sandbox >/dev/null 2>&1; then
-    curl -fsSL https://raw.githubusercontent.com/gilesknap/claude-sandbox2/main/install | bash
-fi
-```
-
-`devcontainer.json` (add this key):
+To re-establish the container-scoped artifacts automatically, add a
+`postCreateCommand` to `devcontainer.json` that re-runs `./install`
+from the existing clone:
 
 ```json
-"postCreateCommand": "bash .devcontainer/bootstrap.sh"
+"postCreateCommand": "./install"
 ```
+
+`installer.py` is idempotent: if `/.runtime/claude` is still there it
+skips the 200+ MB Anthropic download entirely.
 
 ## Make permanent vs keep temporary
 
@@ -143,11 +147,12 @@ Claude session can find a breakout, which a checklist can't measure.
 ## Upgrading
 
 ```
+cd <your-clone>
 claude-sandbox upgrade
 ```
 
-`git pull`s the source clone at `/opt/claude-sandbox-src`, re-syncs
-the venv, and re-execs `install`.
+`git pull`s the clone, re-syncs the venv, and re-execs `install`.
+Equivalent to `git pull && ./install`.
 
 ## Development
 

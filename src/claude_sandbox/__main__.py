@@ -85,19 +85,23 @@ def upgrade_cmd(
         None,
         "--src",
         envvar="CLAUDE_SANDBOX_SRC_DIR",
-        help="Source clone directory (default /opt/claude-sandbox-src).",
+        help="Source clone directory (default: walk up from $PWD).",
     ),
 ) -> None:
     """git pull the source clone, re-sync deps, then re-exec `install`.
 
-    Refuses cleanly if the source clone is missing — the user should
-    re-run the curl-bash installer in that case.
+    Refuses cleanly if the source clone cannot be located — the user
+    should re-run `./install` from a fresh clone in that case.
     """
-    src = src_dir or Path("/opt/claude-sandbox-src")
+    try:
+        src = src_dir or _resolve_src_dir(None)
+    except FileNotFoundError as exc:
+        print(f"claude-sandbox: refusing — {exc}", file=sys.stderr)
+        raise typer.Exit(code=1) from exc
     if not (src / ".git").is_dir():
         print(
             f"claude-sandbox: refusing — no git clone found at {src}. "
-            f"Re-run the curl-bash installer to bootstrap.",
+            f"Re-run `./install` from a fresh clone to bootstrap.",
             file=sys.stderr,
         )
         raise typer.Exit(code=1)
@@ -132,10 +136,7 @@ def list_skills_cmd(
         None,
         "--src",
         envvar="CLAUDE_SANDBOX_SRC_DIR",
-        help=(
-            "Source dir to enumerate (default: locate via $PWD or "
-            "/opt/claude-sandbox-src)."
-        ),
+        help="Source dir to enumerate (default: walk up from $PWD).",
     ),
 ) -> None:
     """Print one shipped skill name per line, alphabetised."""
@@ -150,10 +151,7 @@ def list_commands_cmd(
         None,
         "--src",
         envvar="CLAUDE_SANDBOX_SRC_DIR",
-        help=(
-            "Source dir to enumerate (default: locate via $PWD or "
-            "/opt/claude-sandbox-src)."
-        ),
+        help="Source dir to enumerate (default: walk up from $PWD).",
     ),
 ) -> None:
     """Print one shipped command name per line, alphabetised."""
@@ -190,7 +188,7 @@ def install_skill_cmd(
         None,
         "--src",
         envvar="CLAUDE_SANDBOX_SRC_DIR",
-        help="Source dir (default: locate via $PWD or /opt/claude-sandbox-src).",
+        help="Source dir (default: walk up from $PWD).",
     ),
 ) -> None:
     """Copy shipped skills into <workspace>/.claude/skills/."""
@@ -229,7 +227,7 @@ def install_command_cmd(
         None,
         "--src",
         envvar="CLAUDE_SANDBOX_SRC_DIR",
-        help="Source dir (default: locate via $PWD or /opt/claude-sandbox-src).",
+        help="Source dir (default: walk up from $PWD).",
     ),
 ) -> None:
     """Copy shipped commands into <workspace>/.claude/commands/."""
@@ -275,33 +273,38 @@ def _run_install(
 
 
 def _resolve_src_dir(explicit: Path | None) -> Path:
-    """Find the source clone. Order: explicit arg, env, /opt, walk-up.
+    """Find the source clone. Order: explicit arg, env, walk-up.
 
-    The walk-up path makes tests and local development work — running
+    The walk-up makes tests and local development work — running
     `claude-sandbox list-skills` in a checkout finds the local
-    `.claude/` without needing /opt/claude-sandbox-src.
+    `.claude/` directly. The `install` script always exports
+    CLAUDE_SANDBOX_SRC_DIR=$SCRIPT_DIR before re-execing into the
+    orchestrator, so env wins in production.
+
+    Raises FileNotFoundError if no candidate looks like a clone.
     """
     if explicit is not None:
         return explicit
     env = os.environ.get("CLAUDE_SANDBOX_SRC_DIR")
     if env:
         return Path(env)
-    canonical = Path("/opt/claude-sandbox-src")
-    if (canonical / ".claude").is_dir():
-        return canonical
     # Walk up from $PWD looking for a `.claude/` directory next to a
-    # pyproject.toml — this is "we are in the dev checkout" mode.
+    # pyproject.toml — "we are in the dev checkout" mode.
     here = Path.cwd().resolve()
     for parent in (here, *here.parents):
         if (parent / ".claude").is_dir() and (parent / "pyproject.toml").is_file():
             return parent
-    # Final fallback: walk up from this file (e.g. when invoked from
-    # the installed venv via the shim).
+    # Final fallback: walk up from this file (when invoked from the
+    # installed venv via the shim, $PWD may be the user's workspace
+    # rather than the clone).
     here = Path(__file__).resolve()
     for parent in here.parents:
         if (parent / ".claude").is_dir() and (parent / "pyproject.toml").is_file():
             return parent
-    return canonical
+    raise FileNotFoundError(
+        "could not locate the claude-sandbox source clone. Set "
+        "CLAUDE_SANDBOX_SRC_DIR or run from within the cloned repository."
+    )
 
 
 if __name__ == "__main__":

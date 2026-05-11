@@ -24,6 +24,27 @@ export CLAUDE_SANDBOX_GITCONFIG_PATH="${CLAUDE_SANDBOX_GITCONFIG_PATH:-@@GITCONF
 
 SRC_DIR="${CLAUDE_SANDBOX_SRC_DIR:-@@SRC_DIR@@}"
 
+# Loud-fail when the install-time-baked paths are missing. Without
+# these checks the shadow falls into one of two confusing modes:
+#   - SRC_DIR gone: `source $SRC_DIR/.../bwrap_argv.sh` silently fails
+#     and `bwrap_argv_build` is undefined a few lines down.
+#   - REAL_CLAUDE gone: bwrap launches but the exec'd path doesn't
+#     exist inside the sandbox, so claude exits immediately with a
+#     hard-to-read errno.
+# Failing here points the user at the real cause: the clone the shadow
+# was wired up against has moved or been deleted, and `./install` needs
+# re-running from a fresh clone.
+if [ ! -d "$SRC_DIR" ]; then
+    echo "claude-sandbox: source tree missing at $SRC_DIR (recorded at install time)." >&2
+    echo "  Re-run \`./install\` from a fresh clone of claude-sandbox2." >&2
+    exit 1
+fi
+if [ ! -x "$REAL_CLAUDE" ]; then
+    echo "claude-sandbox: real Claude binary missing at $REAL_CLAUDE." >&2
+    echo "  Re-run \`./install\` from the clone to re-place it." >&2
+    exit 1
+fi
+
 # Probe whether bwrap's --proc /proc actually mounts a procfs that
 # reflects the new pidns. On rootless nested userns hosts (typical
 # devcontainers) the mount succeeds but the procfs binds to bwrap's

@@ -34,7 +34,7 @@ dev = [
 ]
 
 [project.scripts]
-claude-sandbox = "claude_sandbox.__main__:main"
+claude-sandbox = "claude_sandbox.__main__:app"
 
 [project.urls]
 GitHub = "https://github.com/gilesknap/claude-sandbox"

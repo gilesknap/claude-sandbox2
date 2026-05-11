@@ -16,7 +16,7 @@ BWRAP_ARGV_SH = REPO_ROOT / "src" / "claude_sandbox" / "data" / "bwrap_argv.sh"
 
 def _run_builder(
     workspace: str = "/tmp",
-    real_claude: str = "/opt/claude/bin/claude",
+    real_claude: str = "/test/.runtime/claude",
     fresh_proc: str | None = None,
     home: str | None = None,
 ) -> str:
@@ -127,11 +127,11 @@ def test_argv_sets_is_sandbox_sentinel() -> None:
 
 
 def test_argv_ends_with_real_claude() -> None:
-    argv = _run_builder(real_claude="/opt/claude/bin/claude")
+    argv = _run_builder(real_claude="/test/.runtime/claude")
     lines = argv.strip().splitlines()
     # The argv must terminate with `-- <real_claude>` so any forwarded
     # args land on Claude, not on bwrap.
-    assert lines[-1] == "/opt/claude/bin/claude"
+    assert lines[-1] == "/test/.runtime/claude"
     assert "--" in lines
 
 

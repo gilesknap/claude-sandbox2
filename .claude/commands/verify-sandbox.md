@@ -20,8 +20,9 @@ non-zero (so CI assertions work).
 ## Check 01 — IS_SANDBOX sentinel
 
 `IS_SANDBOX=1` is set inside the sandbox by `bwrap --setenv`. If
-unset, Claude was launched against `/opt/claude/bin/claude` directly,
-bypassing the sandbox entirely. This is the fall-through sentinel.
+unset, Claude was launched against the real binary
+(`<clone>/.runtime/claude`) directly, bypassing the sandbox entirely.
+This is the fall-through sentinel.
 
 ```bash
 [ "${IS_SANDBOX:-}" = "1" ]

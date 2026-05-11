@@ -52,7 +52,7 @@ assert_not_contains() {
 
 set +e
 ARGV1="$(HOME=/root CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
-    bwrap_argv_build /workspaces/foo /opt/claude/bin/claude)"
+    bwrap_argv_build /workspaces/foo /test/.runtime/claude)"
 set -e
 
 assert_contains scenario1 "$ARGV1" "bwrap"
@@ -76,7 +76,7 @@ else
 fi
 assert_contains scenario1 "$ARGV1" "IS_SANDBOX"
 assert_contains scenario1 "$ARGV1" "/etc/claude-gitconfig"
-assert_contains scenario1 "$ARGV1" "/opt/claude/bin/claude"
+assert_contains scenario1 "$ARGV1" "/test/.runtime/claude"
 # Default mode mounts a fresh procfs; the bind-/proc fallback is off.
 assert_contains scenario1 "$ARGV1" "--proc"
 
@@ -84,7 +84,7 @@ assert_contains scenario1 "$ARGV1" "--proc"
 
 set +e
 ARGV2="$(HOME=/root CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
-    bwrap_argv_build /srv/weird-workspace-path /opt/claude/bin/claude)"
+    bwrap_argv_build /srv/weird-workspace-path /test/.runtime/claude)"
 set -e
 
 # Workspace bind only fires if the directory exists; we pass a non-
@@ -103,7 +103,7 @@ mkdir -p "$TMPHOME/.claude"
 
 set +e
 ARGV3a="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
-    bwrap_argv_build "$TMPHOME" /opt/claude/bin/claude)"
+    bwrap_argv_build "$TMPHOME" /test/.runtime/claude)"
 set -e
 assert_contains scenario3a "$ARGV3a" "$TMPHOME/.claude"
 assert_not_contains scenario3a "$ARGV3a" "$TMPHOME/.cache"
@@ -118,7 +118,7 @@ assert_not_contains scenario3a "$ARGV3a" "$TMPHOME/.claude.json"
 mkdir -p "$TMPHOME/.cache"
 set +e
 ARGV3b="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
-    bwrap_argv_build "$TMPHOME" /opt/claude/bin/claude)"
+    bwrap_argv_build "$TMPHOME" /test/.runtime/claude)"
 set -e
 assert_contains scenario3b "$ARGV3b" "$TMPHOME/.claude"
 assert_contains scenario3b "$ARGV3b" "$TMPHOME/.cache"
@@ -127,7 +127,7 @@ assert_contains scenario3b "$ARGV3b" "$TMPHOME/.cache"
 mkdir -p "$TMPHOME/.config/gh" "$TMPHOME/.config/glab-cli"
 set +e
 ARGV3c="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
-    bwrap_argv_build "$TMPHOME" /opt/claude/bin/claude)"
+    bwrap_argv_build "$TMPHOME" /test/.runtime/claude)"
 set -e
 assert_contains scenario3c "$ARGV3c" "$TMPHOME/.config/gh"
 assert_contains scenario3c "$ARGV3c" "$TMPHOME/.config/glab-cli"
@@ -136,7 +136,7 @@ assert_contains scenario3c "$ARGV3c" "$TMPHOME/.config/glab-cli"
 mkdir -p "$TMPHOME/.config/Code"
 set +e
 ARGV3d="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
-    bwrap_argv_build "$TMPHOME" /opt/claude/bin/claude)"
+    bwrap_argv_build "$TMPHOME" /test/.runtime/claude)"
 set -e
 assert_not_contains scenario3d "$ARGV3d" "$TMPHOME/.config/Code"
 
@@ -146,7 +146,7 @@ assert_not_contains scenario3d "$ARGV3d" "$TMPHOME/.config/Code"
 touch "$TMPHOME/.claude.json"
 set +e
 ARGV3e="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
-    bwrap_argv_build "$TMPHOME" /opt/claude/bin/claude)"
+    bwrap_argv_build "$TMPHOME" /test/.runtime/claude)"
 set -e
 assert_contains scenario3e "$ARGV3e" "$TMPHOME/.claude.json"
 
@@ -160,7 +160,7 @@ mkdir -p "$TMPHOME/.local/share/uv" "$TMPHOME/.local/bin"
 touch "$TMPHOME/.local/bin/uv" "$TMPHOME/.local/bin/uvx"
 set +e
 ARGV3f="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
-    bwrap_argv_build "$TMPHOME" /opt/claude/bin/claude)"
+    bwrap_argv_build "$TMPHOME" /test/.runtime/claude)"
 set -e
 assert_contains scenario3f "$ARGV3f" "$TMPHOME/.local/share/uv"
 assert_contains scenario3f "$ARGV3f" "$TMPHOME/.local/bin/uv"
@@ -178,7 +178,7 @@ assert_contains scenario3f "$ARGV3f" \
 set +e
 ARGV4="$(HOME=/root CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
     CLAUDE_SANDBOX_FRESH_PROC=0 \
-    bwrap_argv_build /workspaces/foo /opt/claude/bin/claude)"
+    bwrap_argv_build /workspaces/foo /test/.runtime/claude)"
 set -e
 # In degraded mode the fresh-proc mount is gone and the bind-/proc pair
 # is present. grep -A1 matches the line *after* the flag so we assert

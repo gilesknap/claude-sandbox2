@@ -69,3 +69,10 @@ lockfiles/
 
 # ruff cache
 .ruff_cache/
+
+# claude local files
+.claude/settings.local.json
+
+# Real Claude binary, copied here by `./install` so it survives
+# devcontainer rebuilds when the clone is on a host-mounted volume.
+/.runtime/
