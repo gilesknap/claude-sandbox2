@@ -256,4 +256,9 @@ main() {
     echo "  run \`/verify-sandbox\` inside Claude for the live battery."
 }
 
-main "$@"
+# Source guard: `promote.sh` re-uses `install_file`,
+# `wire_settings_hook`, and `wire_settings_statusline` by sourcing this
+# file. The guard keeps main() from auto-running in that case.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    main "$@"
+fi

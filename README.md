@@ -14,7 +14,7 @@ rootless-podman pattern):
 ```
 git clone https://github.com/gilesknap/claude-sandbox2.git
 cd claude-sandbox2
-sudo ./install
+./install
 ```
 
 Then run `claude` as usual — the shadow on `$PATH` wraps every
@@ -24,8 +24,8 @@ pass.
 
 The installer is idempotent: re-run after a devcontainer rebuild and
 the shadow is re-established without re-downloading Claude. Wire
-`sudo bash <clone>/install` into your devcontainer's `postCreate.sh`
-to automate that step.
+`bash <clone>/install` into your devcontainer's `postCreate.sh` to
+automate that step.
 
 > Currently published as `gilesknap/claude-sandbox2` during the
 > proving period. Once stable it reverts to the canonical
@@ -41,7 +41,7 @@ clone there instead:
 cd /user-terminal-config
 git clone https://github.com/gilesknap/claude-sandbox2.git
 cd claude-sandbox2
-sudo ./install
+./install
 ```
 
 The clone lives on the host under `~/.config/terminal-config`, so it
@@ -94,7 +94,46 @@ lives at `.claude/commands/verify-sandbox.md`.
 just upgrade
 ```
 
-Equivalent to `git pull --ff-only && sudo bash install`.
+Equivalent to `git pull --ff-only && bash install`.
+
+## Promoting into a host workspace
+
+`just promote` makes a target workspace a self-sufficient claude-sandbox
+host — a teammate who clones the target only needs the devcontainer to
+come up; the installer runs from `postCreate.sh` and the curated
+`.claude/` is in tree.
+
+```
+just promote                       # promote into $PWD
+just promote /workspaces/fastcs    # promote into the named target
+```
+
+Three things land in the target:
+
+1. **Curated `.claude/`** — commands, skills, hooks, statusline; plus a
+   surgical merge of our `sandbox-check.sh` hook + `statusLine` into
+   `<target>/.claude/settings.json` (pre-existing keys preserved).
+2. **Install machinery** — `.devcontainer/claude-sandbox/{install.sh,
+   claude-shadow, promote.sh}`, so postCreate can run install.sh
+   directly. The root `install` shim is *not* copied; it's the source
+   repo's manual-UX entry and not a primary workflow for targets. The
+   cost is ~3 small bash files per promoted repo; re-running
+   `just promote` from this clone re-syncs byte-equal.
+3. **`.devcontainer/postCreate.sh`** running
+   `bash .devcontainer/claude-sandbox/install.sh` — created if absent,
+   idempotently appended otherwise.
+
+After it finishes, promote prints a one-line `"postCreateCommand"`
+snippet to paste into the target's `.devcontainer/devcontainer.json`.
+We deliberately don't auto-edit that file: it's JSONC in the wild,
+structured editing while preserving comments is more code than this
+repo wants, and you're the one who knows whether you've already wired
+it or need to combine with an existing `postCreateCommand`. One-time
+edit; subsequent `just promote` runs are byte-stable.
+
+`just promote` is idempotent, refuses self-targeting (`TARGET == clone`),
+and does NOT touch `~/.claude` — that channel stays reserved for
+cross-container shared state (OAuth, memories).
 
 ## Authenticating with forges
 

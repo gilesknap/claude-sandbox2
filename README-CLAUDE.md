@@ -185,7 +185,7 @@ prompt if the sandbox is not intact.
 
 ## What's installed
 
-Container-scoped — re-established by re-running `sudo ./install`,
+Container-scoped — re-established by re-running `./install`,
 typically wired into `postCreate.sh`:
 
 | Path | Source | Purpose |
