@@ -77,8 +77,8 @@ Claude. The deliberate exposures:
 | Workspace | rw | The whole point of Claude — see [workspace visibility caveat](#workspace-visibility-caveat) below |
 | `/etc/claude-gitconfig` | r | Curated gitconfig: gh/glab credential helpers for `https://github.com` and `https://gitlab.diamond.ac.uk`, ssh→https `insteadOf` rewrites, regenerated at every shadow launch from your host's current `user.name`/`user.email` |
 | `/etc/gitconfig` | r | Host's system gitconfig is reachable read-only but neutralised for `git` because `GIT_CONFIG_SYSTEM=/dev/null` — see [gitconfig defence-in-depth](#gitconfig-defence-in-depth) |
-| `/root/.claude/` | rw | Claude's state, settings, skills, hooks. Devcontainer bind-mounts `~/.config/terminal-config/.claude` here so the tree persists across rebuilds and is shared across every devcontainer using the same terminal-config dir |
-| `/root/.claude.json` | rw | Account-level state (OAuth token, recent-projects list, settings). Needs its own bind on top of `~/.claude/` — without it the strict-under-/root tmpfs would swallow the token and re-prompt login every launch |
+| `/root/.claude/` | rw | Claude's state, settings, skills, hooks. `install.sh` symlinks this to `/user-terminal-config/.claude` so the tree persists across rebuilds and is shared with every other devcontainer that mounts the same `terminal-config` dir |
+| `/root/.claude.json` | rw | Account-level state (OAuth token, recent-projects list, settings). Symlinked alongside `~/.claude/`; without it the strict-under-/root tmpfs would swallow the token and re-prompt login every launch |
 | `/root/.cache/` | rw | Tool caches Claude needs across runs (if present) |
 | `/root/.config/gh/` | rw | `gh` CLI's token store. Required so `gh auth status` works and the curated gitconfig's `gh auth git-credential` helper can authenticate `git push` to GitHub without an OAuth popup |
 | `/root/.config/glab-cli/` | rw | `glab` CLI's token store. Same reason as `gh`. Sibling paths under `/root/.config/` (VS Code state, other cred helpers, etc.) are NOT bound |

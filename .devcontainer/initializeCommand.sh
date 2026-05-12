@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
-# Pre-flight: create host-side dirs for bind mounts before the container
-# starts. Docker/podman create missing bind sources as root-owned
-# directories, which then fight the user's UID on the host — easier to
-# just mkdir as the host user first.
+# Pre-flight: create the host-side terminal-config dir before the
+# container starts. Docker/podman create missing bind sources as
+# root-owned directories, which then fight the user's UID on the host —
+# easier to just mkdir as the host user first. install.sh's
+# link_terminal_config creates the .claude/.claude.json children
+# inside it on first run.
 set -euo pipefail
 
-mkdir -p "$HOME/.config/terminal-config/.claude"
-# Claude keeps account-link state (oauthAccount, onboarding flags) in
-# ~/.claude.json — a sibling of ~/.claude, not a child. Bind-mounting a
-# single file requires the source to pre-exist, so ensure it.
-touch "$HOME/.config/terminal-config/.claude.json"
+mkdir -p "$HOME/.config/terminal-config"

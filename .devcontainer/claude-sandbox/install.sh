@@ -122,6 +122,22 @@ ensure_cred_dirs() {
     touch "$HOME/.claude.json"
 }
 
+# link_terminal_config: when /user-terminal-config is mounted (the
+# convention used by terminal-config-style devcontainers), symlink
+# ~/.claude and ~/.claude.json into it so Claude's settings and OAuth
+# state are shared across every devcontainer on the host. Runs before
+# install_claude_binary so the destinations are guaranteed-clean; a
+# pre-existing destination (this repo's bind mount, or a previous
+# install) makes ln a no-op via the -e/-L guards.
+link_terminal_config() {
+    local shared="${CLAUDE_SHARED_CONFIG:-/user-terminal-config}"
+    [ -d "$shared" ] || return 0
+    mkdir -p "$shared/.claude"
+    [ -e "$shared/.claude.json" ] || : > "$shared/.claude.json"
+    [ -e "$HOME/.claude" ]      || [ -L "$HOME/.claude" ]      || ln -s "$shared/.claude"      "$HOME/.claude"
+    [ -e "$HOME/.claude.json" ] || [ -L "$HOME/.claude.json" ] || ln -s "$shared/.claude.json" "$HOME/.claude.json"
+}
+
 # wire_settings_hook: surgical UserPromptSubmit-hook merge into
 # <workspace>/.claude/settings.json.
 #   - file absent → write minimal {"hooks":{"UserPromptSubmit":[...]}}.
@@ -223,6 +239,7 @@ main() {
     install_file "$SCRIPT_DIR/claude-shadow" "$(prefixed /usr/local/bin/claude)"
     apt_install
     probe_userns_or_refuse
+    link_terminal_config
     install_claude_binary
     ensure_cred_dirs
     install_file "$REPO_ROOT/.claude/hooks/sandbox-check.sh" \
