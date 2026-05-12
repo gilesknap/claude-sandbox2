@@ -259,6 +259,22 @@ else
     fail "hook wiring did not run on a workspace with pre-existing .statusLine"
 fi
 
+# link_terminal_config: with CLAUDE_SHARED_CONFIG pointing at a fake
+# shared dir and HOME pointing at a fresh tmpdir, install must create
+# symlinks at $HOME/.claude{,.json} into the shared dir.
+LINK_HOME="$(mktemp -d)"
+LINK_SHARED="$(mktemp -d)"
+trap 'rm -rf "$PREFIX" "$WORKSPACE" "$MERGE_WORKSPACE" "$RESPECT_WORKSPACE" "$LINK_HOME" "$LINK_SHARED"' EXIT
+HOME="$LINK_HOME" CLAUDE_SHARED_CONFIG="$LINK_SHARED" \
+    INSTALL_WORKSPACE="$WORKSPACE" \
+    bash "$REPO_ROOT/.devcontainer/claude-sandbox/install.sh" >/dev/null 2>&1
+if [ "$(readlink "$LINK_HOME/.claude" 2>/dev/null)" = "$LINK_SHARED/.claude" ] \
+        && [ "$(readlink "$LINK_HOME/.claude.json" 2>/dev/null)" = "$LINK_SHARED/.claude.json" ]; then
+    pass
+else
+    fail "link_terminal_config did not symlink ~/.claude{,.json} into $LINK_SHARED"
+fi
+
 # Bwrap sanity check (when bwrap is available AND we are not already
 # inside a sandbox — nested userns is forbidden). CI installs bwrap as
 # a pre-step; locally we tolerate absence or nesting as a skip.

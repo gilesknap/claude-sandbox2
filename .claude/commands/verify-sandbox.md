@@ -71,6 +71,18 @@ strict-under-/root inversion regressed. `.gitconfig` is no longer
 masked — it doesn't normally appear under the tmpfs `$HOME`, but the
 allow-list still permits the name in case a tool drops one.
 
+Claude Code, left to its own devices, would drop a Chrome native-
+messaging-host manifest (`com.anthropic.claude_code_browser_extension.
+json`) into each chromium-family browser's `NativeMessagingHosts`
+directory on launch — `BraveSoftware`, `chromium`, `google-chrome`,
+`microsoft-edge`, `opera`, `vivaldi`. That manifest registers the
+in-sandbox Claude as an RPC target for any installed browser
+extension, which is outside the threat model. The shadow injects
+`--no-chrome` and strips user-supplied `--chrome` so the manifests
+never get written, and check 03 enforces that: if any of those six
+browser-named dirs reappears under `$HOME/.config`, the disable
+regressed.
+
 ```bash
 # ls -A skips . and ..; the allowed top-level entries are the
 # .claude/.cache binds, the .claude.json account-state bind, the
@@ -81,7 +93,9 @@ extras="$(ls -A "$HOME" 2>/dev/null | grep -vxE '\.claude|\.claude\.json|\.cache
 [ -z "$extras" ] || exit 1
 # When .config is present (bwrap intermediate for the credential
 # binds), assert it contains only the trusted subdirs — anything else
-# means a sibling ~/.config tool (VS Code, etc.) leaked through.
+# means either a sibling ~/.config tool (VS Code, etc.) leaked through
+# or the shadow's --no-chrome injection regressed (browser dirs from
+# Claude Code's Chrome native-messaging-host self-registration).
 if [ -d "$HOME/.config" ]; then
     config_extras="$(ls -A "$HOME/.config" 2>/dev/null | grep -vxE 'gh|glab-cli' || true)"
     [ -z "$config_extras" ]

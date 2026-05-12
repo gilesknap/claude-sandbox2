@@ -30,9 +30,15 @@ GITCONFIG_PATH="/etc/claude-gitconfig"
 # sandbox (e.g. a hook or skill spawned `claude`), so fall through to
 # the real binary directly. Inside the sandbox the real binary is
 # bind-mounted at ~/.local/bin/claude — exec that path so argv[0]
-# matches the conventional install location.
+# matches the conventional install location. --no-chrome injection
+# (see filter_chrome_args below) applies here too so a nested spawn
+# can't re-enable the browser-extension RPC channel.
 if [ "$CLAUDE_SHADOW_SOURCE_ONLY" != "1" ] && [ "${IS_SANDBOX:-}" = "1" ]; then
-    exec "${HOME:-/root}/.local/bin/claude" "$@"
+    _filtered=()
+    for _a in "$@"; do
+        case "$_a" in --chrome) ;; *) _filtered+=( "$_a" ) ;; esac
+    done
+    exec "${HOME:-/root}/.local/bin/claude" --no-chrome "${_filtered[@]+"${_filtered[@]}"}"
 fi
 
 # Export so the inlined bwrap_argv_build picks up the gitconfig path.
@@ -158,9 +164,26 @@ bwrap_argv_build() {
         fi
     done
 
+    # Disable the Chrome browser-extension RPC channel: strip any
+    # user-supplied --chrome so it can't override our --no-chrome
+    # injection. The browser extension's native-messaging-host bridge
+    # would let any installed Chrome extension on the host invoke
+    # tools inside this in-sandbox Claude — outside the threat model.
+    # Manifests Claude would otherwise write into ~/.config/<browser>/
+    # NativeMessagingHosts/ are gated on this flag, so check 03
+    # (strict-under-/root) catches any regression.
+    local -a user_args=()
+    local user_arg
+    for user_arg in "$@"; do
+        case "$user_arg" in
+            --chrome) ;;
+            *) user_args+=( "$user_arg" ) ;;
+        esac
+    done
+
     # Exec via the in-sandbox conventional path so Claude's argv[0]
     # matches what the official installer would have placed.
-    argv+=( -- "$home/.local/bin/claude" "$@" )
+    argv+=( -- "$home/.local/bin/claude" --no-chrome "${user_args[@]+"${user_args[@]}"}" )
     printf '%s\n' "${argv[@]}"
 }
 

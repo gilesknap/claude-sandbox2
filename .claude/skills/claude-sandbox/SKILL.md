@@ -58,10 +58,11 @@ on the host reach every repo the PAT covers — the blast radius is
 The user has weighed the rebuild ceremony against this and chosen the
 ceremony.
 
-This is *different* from the `~/.claude` and `~/.claude.json` binds,
-which are deliberately cross-container (one Claude login, persistent
-settings/skills/oauth). PATs are repo-scoped credentials and stay
-container-scoped. Don't conflate the two.
+This is *different* from `~/.claude` and `~/.claude.json`, which are
+deliberately cross-container via the `link_terminal_config` symlink in
+`install.sh` (one Claude login, persistent settings/skills/oauth).
+PATs are repo-scoped credentials and stay container-scoped. Don't
+conflate the two.
 
 **Refuse as regressions:**
 
@@ -98,6 +99,28 @@ All three steps are required, in order. The current `.github/workflows/ci.yml`
 applies them; see the `Allow unprivileged userns`, `Pre-create
 /run/secrets`, and per-step `HOME=/tmp/sandbox-home` blocks. Five
 push-and-iterate cycles landed this — don't re-discover it.
+
+## Design principle — keep dogfood ≈ guest
+
+This repo's own devcontainer (the "dogfood" case in
+`.devcontainer/devcontainer.json`) and consumer devcontainers
+(`git clone` + `sudo ./install` inside someone else's container)
+should go through the same setup path. When a fix could live either
+in `devcontainer.json`/`postCreate.sh`/`initializeCommand.sh` or in
+`install.sh`, prefer `install.sh` so guest devcontainers get it for
+free. Sample: per-file binds for `/root/.claude{,.json}` were dropped
+once `link_terminal_config` covered both paths uniformly — only the
+shared `/user-terminal-config` bind remains in `devcontainer.json`.
+
+**Why:** a code path that only fires for the dogfood container is one
+fewer chance for the consumer flow to silently diverge, and the
+sandbox's audit surface stays single-track.
+
+**Refuse as regressions:** dogfood-only `postCreate` steps,
+`initializeCommand` work, or `devcontainer.json` mounts that could
+have been done in `install.sh` instead. Ask "would this work for a
+clone+install inside an unrelated devcontainer?" — if the answer is
+"only with extra steps", push it into `install.sh`.
 
 ## Historical reversals — raise before re-treading
 
@@ -173,6 +196,36 @@ we printed `extras` directly — turned out `--bind-try /dev/null` masks
 themselves create entries under `$HOME` (the spec hadn't whitelisted
 them). One `printf` of the captured variable beats hours of guessing
 from the outside.
+
+## Diagnostic discipline — bind-mount vs runtime tmpfs write
+
+When unexpected entries appear inside the sandbox (typically under
+`$HOME` or `$HOME/.config`), **first determine whether they're a
+host bind-mount leak or a sandboxed-process runtime write into the
+tmpfs**. The two have completely different remediations and
+mistaking one for the other wastes a lot of time.
+
+```bash
+# Is /root/.config/<thing> a bind from the host?
+grep " /root/.config/<thing> " /proc/self/mountinfo
+# stat -c '%D' compares device IDs — tmpfs entries share /root's dev.
+stat -c '%n: dev=%D inode=%i' /root /root/.config/<thing>
+```
+
+If `mountinfo` shows no entry and `stat` reports the same `dev` as
+`/root` itself, it's a tmpfs write by sandboxed code (a feature
+self-registering at startup) — fix it by disabling the feature
+upstream, not by widening the allow-list (see
+[[feedback-fix-upstream-not-check]]). If `mountinfo` shows a bind
+from the host, that's a genuine inversion leak — tighten the bwrap
+argv to mask it.
+
+Concrete miss: Chrome `NativeMessagingHosts` browser dirs appeared
+under `~/.config/` mid-2026-05; I initially flagged it as a bind
+leak and proposed widening check 03. mountinfo showed no bind —
+it was Claude Code's own startup write into the tmpfs to register
+the browser extension. Correct fix was `--no-chrome` injection in
+the shadow, leaving check 03 strict.
 
 ## Where things live
 

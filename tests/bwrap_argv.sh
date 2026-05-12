@@ -187,5 +187,20 @@ assert_contains scenario6 "$ARGV1" "/root/.netrc"
 assert_contains scenario6 "$ARGV1" "/root/.Xauthority"
 assert_contains scenario6 "$ARGV1" "/root/.ICEauthority"
 
+# --- Scenario 7: chrome browser-extension disable ---
+# Every launch must inject --no-chrome immediately after the -- terminator,
+# and any user-supplied --chrome must be stripped so it can't override
+# the injection. The browser-extension native-messaging-host RPC channel
+# is outside the threat model.
+assert_pair scenario7-default "$ARGV1" "/root/.local/bin/claude" "--no-chrome"
+
+# User passes --chrome — it must be filtered out, --no-chrome stays.
+ARGV7="$(HOME=/root CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
+    bwrap_argv_build /workspaces/foo /test/.local/bin/claude --chrome --version)"
+assert_contains scenario7-strip "$ARGV7" "--no-chrome"
+assert_not_contains scenario7-strip "$ARGV7" "--chrome"
+# User's legit args still pass through.
+assert_contains scenario7-strip "$ARGV7" "--version"
+
 echo "bwrap_argv.sh: $PASSED passed / $FAILED failed"
 [ "$FAILED" -eq 0 ]
