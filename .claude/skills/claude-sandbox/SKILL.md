@@ -197,6 +197,36 @@ themselves create entries under `$HOME` (the spec hadn't whitelisted
 them). One `printf` of the captured variable beats hours of guessing
 from the outside.
 
+## Diagnostic discipline — bind-mount vs runtime tmpfs write
+
+When unexpected entries appear inside the sandbox (typically under
+`$HOME` or `$HOME/.config`), **first determine whether they're a
+host bind-mount leak or a sandboxed-process runtime write into the
+tmpfs**. The two have completely different remediations and
+mistaking one for the other wastes a lot of time.
+
+```bash
+# Is /root/.config/<thing> a bind from the host?
+grep " /root/.config/<thing> " /proc/self/mountinfo
+# stat -c '%D' compares device IDs — tmpfs entries share /root's dev.
+stat -c '%n: dev=%D inode=%i' /root /root/.config/<thing>
+```
+
+If `mountinfo` shows no entry and `stat` reports the same `dev` as
+`/root` itself, it's a tmpfs write by sandboxed code (a feature
+self-registering at startup) — fix it by disabling the feature
+upstream, not by widening the allow-list (see
+[[feedback-fix-upstream-not-check]]). If `mountinfo` shows a bind
+from the host, that's a genuine inversion leak — tighten the bwrap
+argv to mask it.
+
+Concrete miss: Chrome `NativeMessagingHosts` browser dirs appeared
+under `~/.config/` mid-2026-05; I initially flagged it as a bind
+leak and proposed widening check 03. mountinfo showed no bind —
+it was Claude Code's own startup write into the tmpfs to register
+the browser extension. Correct fix was `--no-chrome` injection in
+the shadow, leaving check 03 strict.
+
 ## Where things live
 
 | Concern                       | File                                                |
