@@ -113,13 +113,15 @@ Three things land in the target:
 1. **Curated `.claude/`** — commands, skills, hooks, statusline; plus a
    surgical merge of our `sandbox-check.sh` hook + `statusLine` into
    `<target>/.claude/settings.json` (pre-existing keys preserved).
-2. **Install machinery** — `install` shim and
-   `.devcontainer/claude-sandbox/{install.sh, claude-shadow, promote.sh}`,
-   so `sudo ./install` works directly from the target. The cost is
-   ~5 small bash files per promoted repo; re-running `just promote`
-   from this clone re-syncs byte-equal.
-3. **`.devcontainer/postCreate.sh`** containing `bash install` — created
-   if absent, idempotently appended otherwise.
+2. **Install machinery** — `.devcontainer/claude-sandbox/{install.sh,
+   claude-shadow, promote.sh}`, so postCreate can run install.sh
+   directly. The root `install` shim is *not* copied; it's the source
+   repo's manual-UX entry and not a primary workflow for targets. The
+   cost is ~3 small bash files per promoted repo; re-running
+   `just promote` from this clone re-syncs byte-equal.
+3. **`.devcontainer/postCreate.sh`** running
+   `bash .devcontainer/claude-sandbox/install.sh` — created if absent,
+   idempotently appended otherwise.
 
 After it finishes, promote prints a one-line `"postCreateCommand"`
 snippet to paste into the target's `.devcontainer/devcontainer.json`.

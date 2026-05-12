@@ -102,12 +102,14 @@ a self-sufficient claude-sandbox host:
 1. **Curated `.claude/`** — commands, skills, hooks, statusline,
    plus `wire_settings_{hook,statusline}` against the target's
    `settings.json`.
-2. **Install machinery** — `install` shim and
-   `.devcontainer/claude-sandbox/{install.sh, claude-shadow,
-   promote.sh}` so `sudo ./install` works directly from the target.
-3. **`.devcontainer/postCreate.sh`** running `bash install` (created
-   if absent, idempotently appended otherwise). Promote then prints
-   a one-line `postCreateCommand` snippet for the user to paste into
+2. **Install machinery** — `.devcontainer/claude-sandbox/{install.sh,
+   claude-shadow, promote.sh}` only. The root `install` shim is *not*
+   copied; it's the source repo's manual-UX entry (`sudo ./install`),
+   not a target workflow.
+3. **`.devcontainer/postCreate.sh`** running
+   `bash .devcontainer/claude-sandbox/install.sh` (created if absent,
+   idempotently appended otherwise). Promote then prints a one-line
+   `postCreateCommand` snippet for the user to paste into
    `devcontainer.json` — we do **not** edit it.
 
 **Refuse as a regression**: auto-editing `devcontainer.json`. It's

@@ -8,12 +8,15 @@
 #
 # 1. Curated `.claude/` content (commands, skills, hooks, statusline,
 #    sandbox-check hook + statusLine wiring into settings.json).
-# 2. Install machinery (`install` shim, `.devcontainer/claude-sandbox/`
-#    scripts) so `sudo ./install` works from the target.
-# 3. `.devcontainer/postCreate.sh` runs `bash install`; we then print
-#    the one-line JSON snippet the user pastes into devcontainer.json
-#    so install runs automatically on devcontainer create. We do NOT
-#    edit devcontainer.json — it's JSONC in the wild and the user knows
+# 2. Install machinery (`.devcontainer/claude-sandbox/{install.sh,
+#    claude-shadow, promote.sh}`) so postCreate can run install.sh
+#    directly. The source repo's root `install` shim is NOT copied —
+#    it's the source-repo UX entry, not a promoted-target workflow.
+# 3. `.devcontainer/postCreate.sh` runs
+#    `bash .devcontainer/claude-sandbox/install.sh`; we then print the
+#    one-line JSON snippet the user pastes into devcontainer.json so
+#    install runs automatically on devcontainer create. We do NOT edit
+#    devcontainer.json — it's JSONC in the wild and the user knows
 #    whether they've already wired it or need to combine with their own.
 #
 # Idempotent: re-runs are byte-stable via install_file's `cmp -s`
@@ -71,37 +74,38 @@ copy_tree() {
 }
 
 # wire_postcreate_script: ensure <target>/.devcontainer/postCreate.sh
-# exists and runs `bash install`. If a postCreate.sh is already there,
-# append our line unless one of `bash install` / `sudo bash install`
-# (with optional leading whitespace) is already on a line. Final mode
-# is 0755 so devcontainer.json's "postCreateCommand": ".devcontainer/
-# postCreate.sh" form works without an explicit `bash` prefix.
+# exists and runs `.devcontainer/claude-sandbox/install.sh`. If a
+# postCreate.sh is already there, append our line unless an installer
+# invocation is already present. Final mode is 0755 so
+# devcontainer.json's `"postCreateCommand": ".devcontainer/postCreate.sh"`
+# form works without an explicit `bash` prefix.
 wire_postcreate_script() {
     local pc="$TARGET/.devcontainer/postCreate.sh"
+    local install_cmd="bash .devcontainer/claude-sandbox/install.sh"
     mkdir -p "$(dirname "$pc")"
 
     if [ ! -f "$pc" ]; then
-        cat > "$pc" <<'EOF'
+        cat > "$pc" <<EOF
 #!/usr/bin/env bash
 # postCreate: run the claude-sandbox installer baked in by
-# `just promote`. Idempotent so devcontainer rebuilds re-establish the
-# shadow without re-downloading Claude.
+# 'just promote'. Idempotent so devcontainer rebuilds re-establish
+# the shadow without re-downloading Claude.
 set -euo pipefail
 
-bash install
+$install_cmd
 EOF
         chmod 0755 "$pc"
         return 0
     fi
 
-    if grep -Eq '^[[:space:]]*(sudo[[:space:]]+)?bash[[:space:]]+install([[:space:]]|$)' "$pc"; then
+    if grep -Eq '^[[:space:]]*(sudo[[:space:]]+)?bash[[:space:]]+\.devcontainer/claude-sandbox/install\.sh' "$pc"; then
         chmod 0755 "$pc"
         return 0
     fi
 
     {
         printf '\n# claude-sandbox: bring up the sandbox (added by just promote).\n'
-        printf 'bash install\n'
+        printf '%s\n' "$install_cmd"
     } >> "$pc"
     chmod 0755 "$pc"
 }
@@ -136,8 +140,10 @@ wire_settings_hook
 wire_settings_statusline
 
 # Layer 2: install machinery — the target becomes self-installing so a
-# teammate doesn't need a second clone of claude-sandbox.
-install_file "$REPO_ROOT/install"        "$TARGET/install"
+# teammate doesn't need a second clone of claude-sandbox. The root
+# `install` shim is NOT copied; promoted repos invoke install.sh
+# directly from postCreate.sh. The shim is the source repo's manual-UX
+# entry (`sudo ./install`) and isn't a primary workflow for targets.
 install_file "$SCRIPT_DIR/install.sh"    "$TARGET/.devcontainer/claude-sandbox/install.sh"
 install_file "$SCRIPT_DIR/claude-shadow" "$TARGET/.devcontainer/claude-sandbox/claude-shadow"
 install_file "$SCRIPT_DIR/promote.sh"    "$TARGET/.devcontainer/claude-sandbox/promote.sh"
@@ -154,4 +160,4 @@ echo "claude-sandbox: promote complete."
 echo "  source:   $REPO_ROOT"
 echo "  target:   $TARGET"
 echo "  next:     open $TARGET in a devcontainer (postCreate will install),"
-echo "            or run 'sudo ./install' from inside it manually."
+echo "            or 'sudo bash .devcontainer/claude-sandbox/install.sh' inside it."

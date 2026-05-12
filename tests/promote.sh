@@ -2,8 +2,9 @@
 # Promote smoke test. Drives `.devcontainer/claude-sandbox/promote.sh`
 # against tmpdir "host workspaces" and asserts:
 #   - curated .claude/{commands,skills,hooks,statusline}, settings merge
-#   - install machinery: install shim + .devcontainer/claude-sandbox/*
-#   - .devcontainer/postCreate.sh created (or appended) with `bash install`
+#   - install machinery: .devcontainer/claude-sandbox/* (no root shim)
+#   - .devcontainer/postCreate.sh created (or appended) with the
+#     install.sh invocation
 #   - the devcontainer.json paste-this snippet is always printed
 #   - devcontainer.json is NEVER modified (even when present)
 #   - re-runs are byte-stable
@@ -79,8 +80,9 @@ else
     fail "promoted settings.json missing .statusLine"
 fi
 
-# Install machinery: byte-equal copies of install shim, install.sh,
-# claude-shadow, promote.sh.
+# Install machinery: byte-equal copies of install.sh, claude-shadow,
+# promote.sh. The root `install` shim is intentionally NOT copied —
+# promoted repos invoke install.sh directly from postCreate.
 expect_byte_equal() {
     local src="$1" dst="$2"
     if cmp -s "$src" "$dst"; then
@@ -89,30 +91,28 @@ expect_byte_equal() {
         fail "$dst differs from source $src"
     fi
 }
-expect_byte_equal "$REPO_ROOT/install"                                    "$TARGET/install"
 expect_byte_equal "$REPO_ROOT/.devcontainer/claude-sandbox/install.sh"    "$TARGET/.devcontainer/claude-sandbox/install.sh"
 expect_byte_equal "$REPO_ROOT/.devcontainer/claude-sandbox/claude-shadow" "$TARGET/.devcontainer/claude-sandbox/claude-shadow"
 expect_byte_equal "$REPO_ROOT/.devcontainer/claude-sandbox/promote.sh"    "$TARGET/.devcontainer/claude-sandbox/promote.sh"
 
-# Install shim mode (cosmetic — invoked as `bash install` — but
-# matches install.sh's policy).
-if [ -x "$TARGET/install" ]; then
+# Root `install` shim must NOT land in the target.
+if [ ! -e "$TARGET/install" ]; then
     pass
 else
-    fail "install shim not executable in promoted target"
+    fail "root install shim was copied into target (should be source-repo-only)"
 fi
 
-# postCreate.sh exists, is executable, contains `bash install`.
+# postCreate.sh exists, is executable, contains the install.sh invocation.
 PC="$TARGET/.devcontainer/postCreate.sh"
 if [ -f "$PC" ] && [ -x "$PC" ]; then
     pass
 else
     fail "postCreate.sh missing or not executable"
 fi
-if grep -Eq '^[[:space:]]*bash[[:space:]]+install([[:space:]]|$)' "$PC"; then
+if grep -Eq '^[[:space:]]*bash[[:space:]]+\.devcontainer/claude-sandbox/install\.sh' "$PC"; then
     pass
 else
-    fail "postCreate.sh does not contain a 'bash install' line"
+    fail "postCreate.sh does not contain the install.sh invocation"
 fi
 
 # devcontainer.json was not auto-created — promote stays out of that
@@ -194,11 +194,11 @@ chmod 0755 "$APPEND_TARGET/.devcontainer/postCreate.sh"
 
 run_promote "$APPEND_TARGET" || fail "promote with existing postCreate.sh exited non-zero"
 if grep -q 'echo "user setup"' "$APPEND_TARGET/.devcontainer/postCreate.sh" && \
-   grep -Eq '^[[:space:]]*bash[[:space:]]+install([[:space:]]|$)' \
+   grep -Eq '^[[:space:]]*bash[[:space:]]+\.devcontainer/claude-sandbox/install\.sh' \
         "$APPEND_TARGET/.devcontainer/postCreate.sh"; then
     pass
 else
-    fail "promote did not preserve user postCreate.sh content + append 'bash install'"
+    fail "promote did not preserve user postCreate.sh content + append install.sh"
 fi
 
 # Re-run: line count must be stable (dedup guard).
@@ -208,7 +208,7 @@ LINES_B="$(wc -l < "$APPEND_TARGET/.devcontainer/postCreate.sh")"
 if [ "$LINES_A" = "$LINES_B" ]; then
     pass
 else
-    fail "promote re-run duplicated 'bash install' in postCreate.sh (lines went $LINES_A -> $LINES_B)"
+    fail "promote re-run duplicated install.sh in postCreate.sh (lines went $LINES_A -> $LINES_B)"
 fi
 
 # ============================================================
