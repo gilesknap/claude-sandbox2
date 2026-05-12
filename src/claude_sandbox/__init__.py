@@ -1,5 +1,5 @@
 """claude-sandbox: bwrap-isolated Claude Code installer."""
 
-from __future__ import annotations
+from ._version import __version__
 
-__version__ = "0.1.0"
+__all__ = ["__version__"]

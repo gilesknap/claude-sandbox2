@@ -44,6 +44,28 @@ def test_render_marks_all_dirs_safe() -> None:
     assert "directory = *" in body
 
 
+def test_render_rewrites_ssh_to_https_for_github() -> None:
+    """git clone git@github.com:foo/bar must transparently use https
+    so the gh credential helper kicks in (no SSH agent in the sandbox).
+    Both scp form and ssh:// URL form need their own insteadOf because
+    git matches a fixed-string prefix, not a parsed URL."""
+    body = gitconfig.render("x", "x@x")
+    assert '[url "https://github.com/"]' in body
+    assert "insteadOf = git@github.com:" in body
+    assert "insteadOf = ssh://git@github.com/" in body
+
+
+def test_render_rewrites_ssh_to_https_for_gitlab_diamond() -> None:
+    """Same as the github rewrite, paired with the glab credential
+    helper so pushes to gitlab.diamond.ac.uk work over https."""
+    body = gitconfig.render("x", "x@x")
+    assert '[credential "https://gitlab.diamond.ac.uk"]' in body
+    assert "helper = !glab auth git-credential" in body
+    assert '[url "https://gitlab.diamond.ac.uk/"]' in body
+    assert "insteadOf = git@gitlab.diamond.ac.uk:" in body
+    assert "insteadOf = ssh://git@gitlab.diamond.ac.uk/" in body
+
+
 def test_render_is_pure() -> None:
     """Same input -> same bytes, every time."""
     a = gitconfig.render("Ada", "ada@example.com")
@@ -124,7 +146,9 @@ def test_shadow_heredoc_matches_python_render() -> None:
     # produce. Substituting with Python's .format would miss any bash-only
     # quoting subtlety.
     body = match.group("body")
-    script = f'git_name="Ada Lovelace"\ngit_email="ada@example.com"\ncat <<EOF\n{body}\nEOF'
+    script = (
+        f'git_name="Ada Lovelace"\ngit_email="ada@example.com"\ncat <<EOF\n{body}\nEOF'
+    )
     rendered = subprocess.run(
         ["bash", "-c", script],
         check=True,
@@ -143,6 +167,14 @@ def test_generate_full_body_byte_for_byte(tmp_path: Path) -> None:
         "    email = a@a\n"
         '[credential "https://github.com"]\n'
         "    helper = !gh auth git-credential\n"
+        '[credential "https://gitlab.diamond.ac.uk"]\n'
+        "    helper = !glab auth git-credential\n"
+        '[url "https://github.com/"]\n'
+        "    insteadOf = git@github.com:\n"
+        "    insteadOf = ssh://git@github.com/\n"
+        '[url "https://gitlab.diamond.ac.uk/"]\n'
+        "    insteadOf = git@gitlab.diamond.ac.uk:\n"
+        "    insteadOf = ssh://git@gitlab.diamond.ac.uk/\n"
         "[init]\n"
         "    defaultBranch = main\n"
         "[safe]\n"

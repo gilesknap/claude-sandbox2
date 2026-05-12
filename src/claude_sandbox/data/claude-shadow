@@ -24,6 +24,27 @@ export CLAUDE_SANDBOX_GITCONFIG_PATH="${CLAUDE_SANDBOX_GITCONFIG_PATH:-@@GITCONF
 
 SRC_DIR="${CLAUDE_SANDBOX_SRC_DIR:-@@SRC_DIR@@}"
 
+# Loud-fail when the install-time-baked paths are missing. Without
+# these checks the shadow falls into one of two confusing modes:
+#   - SRC_DIR gone: `source $SRC_DIR/.../bwrap_argv.sh` silently fails
+#     and `bwrap_argv_build` is undefined a few lines down.
+#   - REAL_CLAUDE gone: bwrap launches but the exec'd path doesn't
+#     exist inside the sandbox, so claude exits immediately with a
+#     hard-to-read errno.
+# Failing here points the user at the real cause: the clone the shadow
+# was wired up against has moved or been deleted, and `./install` needs
+# re-running from a fresh clone.
+if [ ! -d "$SRC_DIR" ]; then
+    echo "claude-sandbox: source tree missing at $SRC_DIR (recorded at install time)." >&2
+    echo "  Re-run \`./install\` from a fresh clone of claude-sandbox2." >&2
+    exit 1
+fi
+if [ ! -x "$REAL_CLAUDE" ]; then
+    echo "claude-sandbox: real Claude binary missing at $REAL_CLAUDE." >&2
+    echo "  Re-run \`./install\` from the clone to re-place it." >&2
+    exit 1
+fi
+
 # Probe whether bwrap's --proc /proc actually mounts a procfs that
 # reflects the new pidns. On rootless nested userns hosts (typical
 # devcontainers) the mount succeeds but the procfs binds to bwrap's
@@ -87,6 +108,14 @@ cat > "$CLAUDE_SANDBOX_GITCONFIG_PATH" <<EOF
     email = $git_email
 [credential "https://github.com"]
     helper = !gh auth git-credential
+[credential "https://gitlab.diamond.ac.uk"]
+    helper = !glab auth git-credential
+[url "https://github.com/"]
+    insteadOf = git@github.com:
+    insteadOf = ssh://git@github.com/
+[url "https://gitlab.diamond.ac.uk/"]
+    insteadOf = git@gitlab.diamond.ac.uk:
+    insteadOf = ssh://git@gitlab.diamond.ac.uk/
 [init]
     defaultBranch = main
 [safe]
@@ -106,4 +135,24 @@ touch "${HOME:-/root}/.claude.json"
 source "$SRC_DIR/src/claude_sandbox/data/bwrap_argv.sh"
 
 mapfile -t ARGV < <(bwrap_argv_build "$PWD" "$REAL_CLAUDE" "$@")
-exec "${ARGV[@]}"
+
+# Wrap bwrap in script(1) so the sandbox runs inside a freshly-allocated
+# pseudo-terminal. Three properties this gives us:
+#
+#   1. SIGWINCH propagates: script forwards window-size changes from
+#      the host terminal to the inner pty (via TIOCSWINSZ), and the pty
+#      kernel driver delivers SIGWINCH to the in-sandbox foreground pg.
+#      The previous --new-session approach severed this chain.
+#   2. Job control works: Ctrl-Z, fg/bg, SIGINT routing all behave.
+#   3. TIOCSTI is defanged: an ioctl(TIOCSTI) inside the sandbox
+#      lands in script's pty, whose contents script reads and *writes*
+#      (as bytes, not keystrokes) to the host terminal. The host
+#      shell's input buffer is unreachable. Combined with --dev /dev
+#      in bwrap_argv.sh (no host /dev/pts visible), the in-sandbox
+#      process has no path to the host's controlling tty.
+#
+# script's `-q` silences the start/end banner; `-E never` disables
+# echo manipulation; the typescript log is sunk to /dev/null because
+# we don't want to record the session. The argv is %q-escaped for
+# script's sh -c re-parse.
+exec script -q -E never -c "$(printf '%q ' "${ARGV[@]}")" /dev/null

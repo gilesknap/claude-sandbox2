@@ -3,17 +3,18 @@
 # and the workspace venv is ready for dev work.
 #
 # Order matters:
-#   1. Refuse without a git repo — `bash install` clones the source
-#      tree and pytest needs git for some checks; failing here gives a
-#      clearer error than the cascade below.
+#   1. Refuse without a git repo — the test suite uses git history and
+#      the shadow's loud-fail check confirms $SRC_DIR/.git looks like a
+#      clone. Failing here gives a clearer error than the cascade below.
 #   2. uv sync — produces .venv so `uv run pytest` and IDE integrations
 #      work straight away.
 #   3. bash install — apt-installs runtime deps, drops the shadow at
-#      /usr/local/bin/claude, populates /opt/claude-sandbox-src. The
-#      whole point of this devcontainer: without this step, opening
-#      the repo gives `claude` from the real binary and the workspace
-#      UserPromptSubmit hook fires `BLOCKED: IS_SANDBOX unset` on every
-#      prompt. installer.py is idempotent so rebuild is safe.
+#      /usr/local/bin/claude, and copies the real Claude binary into
+#      <clone>/.runtime/claude. The whole point of this devcontainer:
+#      without this step, opening the repo gives `claude` from the real
+#      binary and the workspace UserPromptSubmit hook fires
+#      `BLOCKED: IS_SANDBOX unset` on every prompt. installer.py is
+#      idempotent so rebuild is safe.
 set -euo pipefail
 
 if [ ! -d .git ]; then
@@ -22,7 +23,8 @@ if [ ! -d .git ]; then
 ================================================================
 ERROR: This directory is not a git repository.
 
-claude-sandbox's `install` script clones the source tree and the
+claude-sandbox's shadow refuses to launch without a clone on disk
+(it sources bwrap_argv.sh from $SRC_DIR/.git's parent), and the
 test suite uses git history. Neither works without a git repo.
 
 To fix this, run on the host (outside the devcontainer):

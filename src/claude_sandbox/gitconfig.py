@@ -1,10 +1,12 @@
 """Generate the curated `/etc/claude-gitconfig` from host identity.
 
-The sandbox masks `$HOME/.gitconfig` and `/etc/gitconfig` (defence in
-depth on top of strict-under-/root). To still get correctly-attributed
-commits inside the sandbox, the launcher exports
-`GIT_CONFIG_GLOBAL=/etc/claude-gitconfig` — this module produces that
-file.
+The host's `$HOME/.gitconfig` is invisible to the sandbox via
+strict-under-/root, and `/etc/gitconfig` is neutralised by
+`GIT_CONFIG_SYSTEM=/dev/null` exported alongside
+`GIT_CONFIG_GLOBAL=/etc/claude-gitconfig`. This module produces the
+curated file that ends up in effect: host identity for commit
+attribution, gh/glab credential helpers, and ssh→https rewrites so
+SSH-shaped clone URLs work without an SSH agent in the sandbox.
 
 Why a separate module: the prior bash project's gitconfig generator
 (`lib/gitconfig_generator.sh`) lived in shell with a here-doc; in
@@ -52,8 +54,15 @@ def render(user_name: str, user_email: str) -> str:
 
     Sections:
       - [user] — host identity for commit attribution.
-      - [credential "https://github.com"] — `gh` as the helper so
-        `git push` works inside the sandbox without an OAuth popup.
+      - [credential "https://github.com"] / [credential "https://gitlab.diamond.ac.uk"]
+        — `gh` / `glab` as the helpers so `git push` works inside the
+        sandbox without an OAuth popup.
+      - [url …] — ssh→https rewrites for github.com and
+        gitlab.diamond.ac.uk so `git clone git@host:path` transparently
+        uses the credential helpers above. Both scp form
+        (`git@host:`) and URL form (`ssh://git@host/`) are listed
+        because git's insteadOf is a fixed-string prefix match, not a
+        parsed URL.
       - [init] — defaultBranch=main keeps `git init` reproducible.
       - [safe] — directory=* so git inside bwrap doesn't reject the
         bound workspace as "not safe" (UID-mismatch under bwrap's user
@@ -65,6 +74,14 @@ def render(user_name: str, user_email: str) -> str:
         f"    email = {user_email}\n"
         '[credential "https://github.com"]\n'
         "    helper = !gh auth git-credential\n"
+        '[credential "https://gitlab.diamond.ac.uk"]\n'
+        "    helper = !glab auth git-credential\n"
+        '[url "https://github.com/"]\n'
+        "    insteadOf = git@github.com:\n"
+        "    insteadOf = ssh://git@github.com/\n"
+        '[url "https://gitlab.diamond.ac.uk/"]\n'
+        "    insteadOf = git@gitlab.diamond.ac.uk:\n"
+        "    insteadOf = ssh://git@gitlab.diamond.ac.uk/\n"
         "[init]\n"
         "    defaultBranch = main\n"
         "[safe]\n"

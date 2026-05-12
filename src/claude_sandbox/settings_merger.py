@@ -100,7 +100,8 @@ def merge_file(existing_path: Path, ours: dict) -> dict:
         existing = json.loads(stripped)
     except json.JSONDecodeError as exc:
         raise SettingsConflictError(
-            f"existing {existing_path} is not valid JSON; refusing to overwrite ({exc.msg})."
+            f"existing {existing_path} is not valid JSON; refusing to overwrite "
+            f"({exc.msg})."
         ) from exc
     return merge(existing, ours)
 

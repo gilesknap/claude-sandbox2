@@ -1,18 +1,45 @@
 #!/usr/bin/env bash
-# claude-sandbox installer entry point. Pipe-ready:
-#   curl -fsSL https://raw.githubusercontent.com/gilesknap/claude-sandbox2/main/install | bash
+# claude-sandbox installer entry point. Must be run from a git clone of
+# the project:
+#
+#   git clone https://github.com/gilesknap/claude-sandbox2.git
+#   cd claude-sandbox2
+#   sudo ./install
+#
+# No curl-pipe install path: we deliberately want the source tree the
+# user is sitting in to BE the source tree the shadow points at on every
+# launch. That means edits to .claude/, bwrap_argv.sh, or the Python
+# orchestrator take effect immediately on the next `claude` run with
+# nothing to re-sync.
 #
 # This script is a thin probe-and-bootstrap shim. It establishes the
 # preconditions that the Python orchestrator (src/claude_sandbox/cli.py)
-# cannot establish for itself — git, the source clone, and uv — and
-# then re-execs into the orchestrator. Everything substantive happens
-# Python-side.
+# cannot establish for itself — apt deps, the real Claude binary, and
+# uv — and then re-execs into the orchestrator pointed at $SCRIPT_DIR.
 
 set -euo pipefail
 
-SRC_REPO="${CLAUDE_SANDBOX_REPO:-https://github.com/gilesknap/claude-sandbox2.git}"
-SRC_REF="${CLAUDE_SANDBOX_REF:-main}"
-SRC_DIR="${CLAUDE_SANDBOX_SRC_DIR:-/opt/claude-sandbox-src}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Refuse if not executed from a recognisable claude-sandbox clone. This
+# also catches the legacy `curl … | bash` invocation pattern: piping
+# leaves $SCRIPT_DIR pointing at /dev/fd/<n> or a tempdir without a
+# pyproject.toml, so the check fails fast with an actionable error.
+if [ ! -f "$SCRIPT_DIR/pyproject.toml" ] \
+    || [ ! -d "$SCRIPT_DIR/src/claude_sandbox" ]; then
+    cat >&2 <<EOF
+claude-sandbox: refusing — \`install\` must be run from a clone of the
+claude-sandbox2 repository.
+
+    git clone https://github.com/gilesknap/claude-sandbox2.git
+    cd claude-sandbox2
+    sudo ./install
+
+(The curl-pipe install path was removed; the shadow now points at this
+clone in place, so the clone must exist on disk and stay there.)
+EOF
+    exit 1
+fi
 
 # v1 targets root-in-devcontainer; refuse cleanly on non-root rather
 # than producing a confusing apt-get permission failure.
@@ -28,14 +55,14 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-# Bootstrap minimum for the clone + curl-installs; the orchestrator's
+# Bootstrap minimum for the curl-installs below; the orchestrator's
 # probe re-asserts everything before mutating workspace state.
 apt-get install -y -qq --no-install-recommends \
     bubblewrap nodejs gh ca-certificates curl jq git glab
 
-# Install uv if absent. uv hosts the project venv at $SRC_DIR/.venv and
-# runs the typer CLI; depending on the system Python's pip/venv would
-# tie us to whatever Python the base image ships.
+# Install uv if absent. uv hosts the project venv at $SCRIPT_DIR/.venv
+# and runs the typer CLI; depending on the system Python's pip/venv
+# would tie us to whatever Python the base image ships.
 if ! command -v uv >/dev/null 2>&1; then
     curl -fsSL https://astral.sh/uv/install.sh | sh
     # uv installer drops the binary at ~/.local/bin/uv; make it visible
@@ -43,58 +70,21 @@ if ! command -v uv >/dev/null 2>&1; then
     export PATH="$HOME/.local/bin:$PATH"
 fi
 
-# Real Claude binary. Anthropic's installer drops it at ~/.local/bin/claude;
-# the orchestrator moves it to /opt/claude/bin/claude so the shadow on
-# $PATH always wins. Also check ~/.local/bin/claude: a prior install that
-# ran the curl-bash but failed before the orchestrator moved the binary
-# leaves it there, and re-running curl-bash on every retry is slow.
-if [ ! -x /opt/claude/bin/claude ] \
-    && [ ! -x "${HOME}/.local/bin/claude" ] \
+# Real Claude binary. Anthropic's installer drops it at ~/.local/bin/claude
+# (symlink into ~/.local/share/claude/versions/). The orchestrator copies
+# the resolved file into <clone>/.runtime/claude (gitignored). Skip the
+# Anthropic install if either copy is already present:
+#   - <clone>/.runtime/claude — orchestrator-managed final destination.
+#   - ~/.local/bin/claude — Anthropic's drop, present after a prior
+#     curl-bash that crashed before the orchestrator's copy step.
+# Avoids re-downloading 200+ MB on every retry / rebuild.
+if [ ! -x "$SCRIPT_DIR/.runtime/claude" ] \
+    && [ ! -e "${HOME}/.local/bin/claude" ] \
     && ! command -v claude >/dev/null 2>&1; then
     curl -fsSL https://claude.ai/install.sh | bash
 fi
 
-# When `install` is invoked from a checkout of the source tree (the
-# dogfooding loop: edit something, re-run `./install`), sync the
-# working tree into $SRC_DIR rather than cloning from GitHub. The
-# shadow bakes $SRC_DIR in as @@SRC_DIR@@ and sources bwrap_argv.sh
-# from there on every launch, so /opt must reflect local edits to take
-# effect at runtime. Earlier versions of this script set
-# SRC_DIR=$SCRIPT_DIR and ran the orchestrator in-place; the Python
-# side independently defaulted to /opt/claude-sandbox-src for the
-# shadow's @@SRC_DIR@@ substitution, leaving /opt frozen at whatever
-# the last curl-bash install copied in. Syncing closes that gap.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -z "${CLAUDE_SANDBOX_SRC_DIR:-}" ] \
-    && [ -f "$SCRIPT_DIR/pyproject.toml" ] \
-    && [ -d "$SCRIPT_DIR/src/claude_sandbox" ] \
-    && [ -d "$SCRIPT_DIR/.git" ] \
-    && [ "$SCRIPT_DIR" != "$SRC_DIR" ]; then
-    install -d "$(dirname "$SRC_DIR")"
-    rm -rf "$SRC_DIR"
-    mkdir -p "$SRC_DIR"
-    # tar-pipe rather than cp -a: lets us exclude dev-only trees
-    # (.git, .venv, __pycache__) in one pass, and is portable without
-    # adding rsync to the apt deps. -C cd's tar into each side so the
-    # archive paths are relative to the source root.
-    tar -C "$SCRIPT_DIR" \
-        --exclude='./.git' --exclude='./.venv' \
-        --exclude='__pycache__' --exclude='*.pyc' \
-        --exclude='./node_modules' \
-        -cf - . | tar -C "$SRC_DIR" -xf -
-    echo "claude-sandbox: synced local checkout $SCRIPT_DIR -> $SRC_DIR"
-else
-    install -d "$(dirname "$SRC_DIR")"
-    if [ -d "$SRC_DIR/.git" ]; then
-        git -C "$SRC_DIR" fetch --quiet origin "$SRC_REF"
-        git -C "$SRC_DIR" checkout --quiet "$SRC_REF"
-        git -C "$SRC_DIR" reset --hard --quiet "origin/$SRC_REF"
-    else
-        rm -rf "$SRC_DIR"
-        git clone --quiet --branch "$SRC_REF" "$SRC_REPO" "$SRC_DIR"
-    fi
-fi
-
-cd "$SRC_DIR"
+cd "$SCRIPT_DIR"
 uv sync --quiet
+export CLAUDE_SANDBOX_SRC_DIR="$SCRIPT_DIR"
 exec uv run claude-sandbox install "$@"

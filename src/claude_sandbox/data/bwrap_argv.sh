@@ -31,7 +31,15 @@ bwrap_argv_build() {
     local -a argv=(
         bwrap
         --ro-bind / /
-        --dev-bind /dev /dev
+        # Fresh /dev (not --dev-bind) hides the host's /dev/pts so an
+        # in-sandbox ioctl(TIOCSTI) can only inject into the script(1)-
+        # allocated pty the shadow wraps us in — bytes land in *that*
+        # pty's input queue, which script's parent reads and writes as
+        # output to the host terminal (displayed, not enqueued). The
+        # host shell's input buffer is unreachable. This replaces the
+        # --new-session TIOCSTI defence below; see the resize-fix issue
+        # in README-CLAUDE.md.
+        --dev /dev
     )
 
     # Fresh procfs (--proc /proc) gives the sandbox a per-pid-namespace
@@ -71,6 +79,14 @@ bwrap_argv_build() {
         --tmpfs "$home"
     )
 
+    # `$home/.claude` may be a real directory or a symlink to
+    # `/user-terminal-config/.claude` (the shared cross-container tree
+    # bound in by devcontainer.json; the installer sets up that symlink
+    # when the mount is present). Both forms work: `-d` follows the
+    # symlink and `--bind` resolves the source on the host fs, so the
+    # symlink target ends up bound writably at $home/.claude inside
+    # the sandbox. The symlink itself is shadowed by the tmpfs above
+    # — only the resolved content is visible to Claude.
     if [ -d "$home/.claude" ]; then
         argv+=( --bind "$home/.claude" "$home/.claude" )
     fi
@@ -126,6 +142,19 @@ bwrap_argv_build() {
         fi
     done
 
+    # Claude Code's self-check reads `installMethod` from ~/.claude/
+    # config and, when it's `native` (Anthropic's installer's default),
+    # expects to find the binary at `~/.local/bin/claude`. Without this
+    # bind that path is on the strict-under-/root tmpfs and the warning
+    # "claude command not found at /root/.local/bin/claude" fires on
+    # every launch. Bind the same real binary the shadow exec's
+    # ($real_claude = <src_dir>/.runtime/claude) so the self-check sees
+    # exactly what's running. --bind-try is harmless if $real_claude is
+    # absent (the shadow already refuses to launch in that case).
+    if [ -f "$real_claude" ]; then
+        argv+=( --bind-try "$real_claude" "$home/.local/bin/claude" )
+    fi
+
     if [ -n "$workspace" ] && [ -d "$workspace" ]; then
         argv+=( --bind "$workspace" "$workspace" )
     fi
@@ -133,19 +162,46 @@ bwrap_argv_build() {
     # Defence-in-depth file masks. Strict-under-/root already hides the
     # dotfiles under $HOME, but masking them with /dev/null is free,
     # explicit, and survives if the strict-root bind ever regresses.
-    # /etc/gitconfig, /etc/shadow, and /etc/sudoers live outside the
-    # inversion and are masked unconditionally. /etc/shadow leaks the
+    # /etc/shadow, /etc/gshadow, and /etc/sudoers live outside the
+    # inversion and are masked when present. /etc/shadow leaks the
     # host user list (and password hashes on hosts where users have
     # passwords); /etc/sudoers leaks the sudo policy. Both are
     # information-disclosure rather than credential exfil under
-    # cap-drop ALL + NO_NEW_PRIVS, but masking is free. --bind-try
-    # keeps the argv valid on hosts where the source path doesn't
-    # exist.
+    # cap-drop ALL + NO_NEW_PRIVS, but masking is free.
+    #
+    # Gitconfigs are deliberately NOT masked. The host's
+    # /root/.gitconfig is already invisible via strict-under-/root,
+    # and host /etc/gitconfig is neutralised by the env redirect that
+    # follows (GIT_CONFIG_GLOBAL=/etc/claude-gitconfig,
+    # GIT_CONFIG_SYSTEM=/dev/null). The bind-mask we previously layered
+    # on top broke tools like pre-commit that scrub GIT_* env before
+    # spawning a child `git init` (pre_commit/git.py::no_git_env): with
+    # the env redirect gone, the child git fell back to reading the
+    # masked /etc/gitconfig and on EL9 + SELinux that returned EACCES
+    # instead of empty content, aborting every hook.
+    #
+    # $HOME masks always emit: $home is on tmpfs so bwrap can create
+    # the destination mount point, and --bind-try short-circuits when
+    # the source is absent.
+    #
+    # /etc masks are gated on the invoking user being able to *read*
+    # the host file:
+    #   - if the user can't read it (e.g. /etc/shadow mode 0000, or
+    #     /etc/sudoers mode 0440 for a non-root invoker), there is no
+    #     leak to mask — Claude inside the sandbox runs as the same
+    #     real UID under the user namespace and cannot read it either.
+    #   - bwrap setting up a bind on /etc/<file> under a --ro-bind / /
+    #     fails on these hosts (the destination resolution in the new
+    #     namespace dies with EROFS even though the host file exists),
+    #     so emitting the mask unconditionally aborts every launch.
     local mask
-    for mask in "$home/.gitconfig" /etc/gitconfig "$home/.netrc" \
-                "$home/.Xauthority" "$home/.ICEauthority" \
-                /etc/shadow /etc/gshadow /etc/sudoers; do
+    for mask in "$home/.netrc" "$home/.Xauthority" "$home/.ICEauthority"; do
         argv+=( --bind-try /dev/null "$mask" )
+    done
+    for mask in /etc/shadow /etc/gshadow /etc/sudoers; do
+        if [ -r "$mask" ]; then
+            argv+=( --bind /dev/null "$mask" )
+        fi
     done
 
     argv+=(
@@ -163,7 +219,13 @@ bwrap_argv_build() {
         --unshare-ipc
         --unshare-uts
         --unshare-cgroup-try
-        --new-session
+        # --new-session was dropped intentionally: setsid() detached
+        # the sandbox from its controlling terminal, which killed
+        # SIGWINCH delivery (resize stops propagating) and broke job
+        # control. The TIOCSTI defence it provided is now delivered
+        # by the shadow wrapping bwrap in script(1) plus --dev /dev
+        # above (fresh devpts, host /dev/pts not visible). See the
+        # resize-fix issue in README-CLAUDE.md.
         --die-with-parent
     )
 

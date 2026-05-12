@@ -1,13 +1,13 @@
 ---
-description: Verify the Claude sandbox is intact — runs the 17-check PASS/FAIL battery + 10 adversarial breakout probes when the battery passes, and exits non-zero on any failure so the command is usable as a CI assertion.
+description: Verify the Claude sandbox is intact — runs the 16-check PASS/FAIL battery + 10 adversarial breakout probes when the battery passes, and exits non-zero on any failure so the command is usable as a CI assertion.
 ---
 
 `/verify-sandbox` runs **two phases** against the live Claude process:
 
-1. The deterministic **17-check battery** — small bash tests that each
+1. The deterministic **16-check battery** — small bash tests that each
    return PASS or FAIL with a one-line explanation. Covers every
    defence in `README-CLAUDE.md`'s "What's locked down" table.
-2. When (and only when) the 17 checks all pass, **10 adversarial
+2. When (and only when) the 16 checks all pass, **10 adversarial
    breakout probes** — open-ended attempts to escape the sandbox or
    exfiltrate credentials, designed by reasoning about gaps the
    deterministic checks don't directly exercise.
@@ -20,8 +20,9 @@ non-zero (so CI assertions work).
 ## Check 01 — IS_SANDBOX sentinel
 
 `IS_SANDBOX=1` is set inside the sandbox by `bwrap --setenv`. If
-unset, Claude was launched against `/opt/claude/bin/claude` directly,
-bypassing the sandbox entirely. This is the fall-through sentinel.
+unset, Claude was launched against the real binary
+(`<clone>/.runtime/claude`) directly, bypassing the sandbox entirely.
+This is the fall-through sentinel.
 
 ```bash
 [ "${IS_SANDBOX:-}" = "1" ]
@@ -60,12 +61,15 @@ the `gh` / `glab-cli` credential binds. Claude Code itself writes
 `.local/{bin,share,state}/claude` and a `.local/share/applications`
 `.desktop` URL handler into the tmpfs on first launch, so `.local` is
 also expected (contents live in the tmpfs, not bound from the host).
-The defence-in-depth file masks (checks 15–17) also bind `/dev/null`
-over `.gitconfig`, `.netrc`, `.Xauthority`, and `.ICEauthority` — so
-those names are expected to appear too, as size-zero entries (which
-checks 15–17 verify). Anything else under `$HOME`, or anything besides
-`gh` / `glab-cli` under `$HOME/.config`, means the strict-under-/root
-inversion regressed.
+The defence-in-depth file masks (checks 14–15) also bind `/dev/null`
+over `.netrc`, `.Xauthority`, and `.ICEauthority` — so those names
+are expected to appear too, as size-zero entries (which checks 14–15
+verify; `.ICEauthority` is masked without a dedicated check because
+it shares the X11 cookie attack surface). Anything else under `$HOME`,
+or anything besides `gh` / `glab-cli` under `$HOME/.config`, means the
+strict-under-/root inversion regressed. `.gitconfig` is no longer
+masked — it doesn't normally appear under the tmpfs `$HOME`, but the
+allow-list still permits the name in case a tool drops one.
 
 ```bash
 # ls -A skips . and ..; the allowed top-level entries are the
@@ -166,17 +170,26 @@ uts_link="$(readlink /proc/self/ns/uts 2>/dev/null || true)"
 case "$uts_link" in uts:\[*\]) exit 0 ;; *) exit 1 ;; esac
 ```
 
-## Check 10 — --new-session (TIOCSTI blocked)
+## Check 10 — private /dev (TIOCSTI blocked)
 
-`--new-session` calls `setsid()` so the controlling terminal is
-detached. An ioctl(TIOCSTI) injection attempt cannot reach the
-parent shell.
+We dropped `--new-session` so SIGWINCH and job control reach the
+sandbox. The TIOCSTI defence is now delivered by two coupled
+mechanisms: the shadow wraps bwrap in `script(1)` (the in-sandbox
+process inherits script's allocated pty as its controlling terminal,
+not the host's), and `bwrap_argv.sh` uses `--dev /dev` (a fresh
+devtmpfs with a fresh devpts mount — the host's `/dev/pts/*` is
+not visible). An ioctl(TIOCSTI) inside the sandbox can therefore
+only inject into script's pty, whose contents script reads and
+writes as *output bytes* to the host terminal — never as input to
+the parent shell.
 
 ```bash
-# If --new-session is in effect, we have no controlling tty so an
-# attempted TIOCSTI on stdin fails. tty -s exits non-zero when stdin
-# is not a tty; bwrap's --new-session makes that the case.
-! tty -s 2>/dev/null
+# /dev must be a fresh mount inside the sandbox (not a bind of the
+# host's /dev). Under --dev /dev bwrap mounts a private devtmpfs;
+# under --dev-bind /dev /dev it would be a bind mount. mountinfo
+# field 9 (fs type) distinguishes them.
+awk '$5 == "/dev" { print $9; exit }' /proc/self/mountinfo \
+    | grep -qE '^(tmpfs|devtmpfs)$'
 ```
 
 ## Check 11 — /tmp is tmpfs and empty
@@ -208,17 +221,7 @@ when the host has populated `/run/secrets/*`.
 [ -z "$(ls -A /run/secrets 2>/dev/null)" ]
 ```
 
-## Check 14 — file mask: .gitconfig empty
-
-`--bind-try /dev/null /root/.gitconfig` is defence-in-depth on top
-of strict-under-/root. Reading the file inside the sandbox returns
-empty.
-
-```bash
-[ ! -s "$HOME/.gitconfig" ]
-```
-
-## Check 15 — file mask: .netrc empty
+## Check 14 — file mask: .netrc empty
 
 `--bind-try /dev/null /root/.netrc` masks any host `.netrc`
 credentials.
@@ -227,7 +230,7 @@ credentials.
 [ ! -s "$HOME/.netrc" ]
 ```
 
-## Check 16 — file mask: .Xauthority empty
+## Check 15 — file mask: .Xauthority empty
 
 `--bind-try /dev/null /root/.Xauthority` masks the X11 cookie that
 would otherwise authenticate against a host X server.
@@ -236,7 +239,7 @@ would otherwise authenticate against a host X server.
 [ ! -s "$HOME/.Xauthority" ]
 ```
 
-## Check 17 — curated gitconfig active
+## Check 16 — curated gitconfig active
 
 `GIT_CONFIG_GLOBAL=/etc/claude-gitconfig` is exported and the file's
 `user.email` matches the host's. Verifies that the curated gitconfig
@@ -247,10 +250,10 @@ is in effect at every launch.
     [ -n "$(git config --get user.email 2>/dev/null)" ]
 ```
 
-## Phase 2 — Adversarial probes (only when 01–17 all PASS)
+## Phase 2 — Adversarial probes (only when 01–16 all PASS)
 
 When the deterministic battery is clean, think of **10 novel breakout
-approaches and try them**. The goal is to find a gap the 17-check
+approaches and try them**. The goal is to find a gap the 16-check
 matrix doesn't directly exercise — anything that lets the sandbox
 escape its filesystem inversion, recover scrubbed env vars, reach
 the host's network identity, signal/observe processes outside the
@@ -281,7 +284,8 @@ Constraints on the probes:
   (shells/CLIs that look in unexpected places), exec-chain
   escalation (setuid binaries despite NO_NEW_PRIVS, file
   capabilities), bwrap-specific (`--die-with-parent` race,
-  `--new-session` bypass), gitconfig defence-in-depth bypasses.
+  `--new-session` bypass), env-redirect bypasses that would route
+  `git` back to a host gitconfig despite GIT_CONFIG_GLOBAL.
 
 Print the probes as a numbered list under a header
 `Adversarial probes:`, each line `[BLOCKED|ESCAPED|INCONCLUSIVE]
@@ -293,17 +297,17 @@ should be followed by a "Suggested follow-up:" line proposing what
 a more targeted test would look like.
 
 If all 10 probes are **[BLOCKED]**, the sandbox passes both phases
-and the final line becomes `RESULT: SANDBOX OK (17 deterministic +
+and the final line becomes `RESULT: SANDBOX OK (16 deterministic +
 10 adversarial)`.
 
 ## Output format
 
-Print a header line `"/verify-sandbox: 17 checks"`, then one
+Print a header line `"/verify-sandbox: 16 checks"`, then one
 `[PASS]` / `[FAIL]` line per check (zero-padded number, name,
 one-line explanation on FAIL), then a `Summary:` line.
 
 ```
-/verify-sandbox: 17 checks
+/verify-sandbox: 16 checks
   [PASS] 01 IS_SANDBOX sentinel set
   [PASS] 02 NO_NEW_PRIVS: setuid escalation blocked
   [PASS] 03 strict-under-/root: only .claude (+.cache/.local) under $HOME
@@ -317,11 +321,10 @@ one-line explanation on FAIL), then a `Summary:` line.
   [PASS] 11 /tmp tmpfs: no vscode-ipc-*.sock visible
   [PASS] 12 /run/user empty
   [PASS] 13 /run/secrets empty (Docker/Compose secrets masked)
-  [PASS] 14 file mask: $HOME/.gitconfig is empty
-  [PASS] 15 file mask: $HOME/.netrc is empty
-  [PASS] 16 file mask: $HOME/.Xauthority is empty
-  [PASS] 17 curated gitconfig: GIT_CONFIG_GLOBAL set, user.email present
-  Summary: 17 PASS / 0 FAIL
+  [PASS] 14 file mask: $HOME/.netrc is empty
+  [PASS] 15 file mask: $HOME/.Xauthority is empty
+  [PASS] 16 curated gitconfig: GIT_CONFIG_GLOBAL set, user.email present
+  Summary: 16 PASS / 0 FAIL
 
 Adversarial probes:
   [BLOCKED] 01 read /proc/<host_pid>/environ — EACCES (YAMA ptrace_scope=1)
@@ -340,6 +343,6 @@ If any phase-2 probe is `[ESCAPED]`, exit non-zero regardless of
 phase-1 results.
 
 Final result line:
-- All 17 PASS + 10 BLOCKED → `RESULT: SANDBOX OK (17 deterministic + 10 adversarial)`
-- All 17 PASS + ≥1 INCONCLUSIVE + 0 ESCAPED → `RESULT: SANDBOX OK (17 deterministic + N BLOCKED, M INCONCLUSIVE)`
+- All 16 PASS + 10 BLOCKED → `RESULT: SANDBOX OK (16 deterministic + 10 adversarial)`
+- All 16 PASS + ≥1 INCONCLUSIVE + 0 ESCAPED → `RESULT: SANDBOX OK (16 deterministic + N BLOCKED, M INCONCLUSIVE)`
 - Any FAIL or ESCAPED → `RESULT: SANDBOX LEAKING — open an issue against gilesknap/claude-sandbox`

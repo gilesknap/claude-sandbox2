@@ -52,7 +52,7 @@ assert_not_contains() {
 
 set +e
 ARGV1="$(HOME=/root CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
-    bwrap_argv_build /workspaces/foo /opt/claude/bin/claude)"
+    bwrap_argv_build /workspaces/foo /test/.runtime/claude)"
 set -e
 
 assert_contains scenario1 "$ARGV1" "bwrap"
@@ -76,7 +76,13 @@ else
 fi
 assert_contains scenario1 "$ARGV1" "IS_SANDBOX"
 assert_contains scenario1 "$ARGV1" "/etc/claude-gitconfig"
-assert_contains scenario1 "$ARGV1" "/opt/claude/bin/claude"
+# Gitconfigs are deliberately not bind-masked: the env redirect to
+# /etc/claude-gitconfig + strict-under-/root handle the threat, and a
+# bind to /dev/null over /etc/gitconfig broke pre-commit's sanitised
+# subprocesses on EL9 (SELinux made the bound /dev/null read as EACCES).
+assert_not_contains scenario1 "$ARGV1" "/root/.gitconfig"
+assert_not_contains scenario1 "$ARGV1" "/etc/gitconfig"
+assert_contains scenario1 "$ARGV1" "/test/.runtime/claude"
 # Default mode mounts a fresh procfs; the bind-/proc fallback is off.
 assert_contains scenario1 "$ARGV1" "--proc"
 
@@ -84,7 +90,7 @@ assert_contains scenario1 "$ARGV1" "--proc"
 
 set +e
 ARGV2="$(HOME=/root CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
-    bwrap_argv_build /srv/weird-workspace-path /opt/claude/bin/claude)"
+    bwrap_argv_build /srv/weird-workspace-path /test/.runtime/claude)"
 set -e
 
 # Workspace bind only fires if the directory exists; we pass a non-
@@ -103,7 +109,7 @@ mkdir -p "$TMPHOME/.claude"
 
 set +e
 ARGV3a="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
-    bwrap_argv_build "$TMPHOME" /opt/claude/bin/claude)"
+    bwrap_argv_build "$TMPHOME" /test/.runtime/claude)"
 set -e
 assert_contains scenario3a "$ARGV3a" "$TMPHOME/.claude"
 assert_not_contains scenario3a "$ARGV3a" "$TMPHOME/.cache"
@@ -118,7 +124,7 @@ assert_not_contains scenario3a "$ARGV3a" "$TMPHOME/.claude.json"
 mkdir -p "$TMPHOME/.cache"
 set +e
 ARGV3b="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
-    bwrap_argv_build "$TMPHOME" /opt/claude/bin/claude)"
+    bwrap_argv_build "$TMPHOME" /test/.runtime/claude)"
 set -e
 assert_contains scenario3b "$ARGV3b" "$TMPHOME/.claude"
 assert_contains scenario3b "$ARGV3b" "$TMPHOME/.cache"
@@ -127,7 +133,7 @@ assert_contains scenario3b "$ARGV3b" "$TMPHOME/.cache"
 mkdir -p "$TMPHOME/.config/gh" "$TMPHOME/.config/glab-cli"
 set +e
 ARGV3c="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
-    bwrap_argv_build "$TMPHOME" /opt/claude/bin/claude)"
+    bwrap_argv_build "$TMPHOME" /test/.runtime/claude)"
 set -e
 assert_contains scenario3c "$ARGV3c" "$TMPHOME/.config/gh"
 assert_contains scenario3c "$ARGV3c" "$TMPHOME/.config/glab-cli"
@@ -136,7 +142,7 @@ assert_contains scenario3c "$ARGV3c" "$TMPHOME/.config/glab-cli"
 mkdir -p "$TMPHOME/.config/Code"
 set +e
 ARGV3d="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
-    bwrap_argv_build "$TMPHOME" /opt/claude/bin/claude)"
+    bwrap_argv_build "$TMPHOME" /test/.runtime/claude)"
 set -e
 assert_not_contains scenario3d "$ARGV3d" "$TMPHOME/.config/Code"
 
@@ -146,7 +152,7 @@ assert_not_contains scenario3d "$ARGV3d" "$TMPHOME/.config/Code"
 touch "$TMPHOME/.claude.json"
 set +e
 ARGV3e="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
-    bwrap_argv_build "$TMPHOME" /opt/claude/bin/claude)"
+    bwrap_argv_build "$TMPHOME" /test/.runtime/claude)"
 set -e
 assert_contains scenario3e "$ARGV3e" "$TMPHOME/.claude.json"
 
@@ -160,7 +166,7 @@ mkdir -p "$TMPHOME/.local/share/uv" "$TMPHOME/.local/bin"
 touch "$TMPHOME/.local/bin/uv" "$TMPHOME/.local/bin/uvx"
 set +e
 ARGV3f="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
-    bwrap_argv_build "$TMPHOME" /opt/claude/bin/claude)"
+    bwrap_argv_build "$TMPHOME" /test/.runtime/claude)"
 set -e
 assert_contains scenario3f "$ARGV3f" "$TMPHOME/.local/share/uv"
 assert_contains scenario3f "$ARGV3f" "$TMPHOME/.local/bin/uv"
@@ -168,6 +174,26 @@ assert_contains scenario3f "$ARGV3f" "$TMPHOME/.local/bin/uvx"
 # PATH must include $HOME/.local/bin so `uv` resolves without a full path.
 assert_contains scenario3f "$ARGV3f" \
     "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$TMPHOME/.local/bin"
+
+# --- Scenario 3g: ~/.claude is a symlink to the shared terminal-config tree ---
+# The installer points ~/.claude at /user-terminal-config/.claude when
+# the devcontainer mounts the shared dir. `[ -d ]` follows the symlink
+# and `--bind` resolves source paths on the host fs, so the bind argv
+# token is still ~/.claude — the symlink target is invisible at the
+# argv layer (bwrap dereferences it at mount time).
+TMPSHARED="$(mktemp -d)"
+trap 'rm -rf "$TMPHOME" "$TMPSHARED"' EXIT
+mkdir -p "$TMPSHARED/.claude-shared"
+rm -rf "$TMPHOME/.claude"
+ln -s "$TMPSHARED/.claude-shared" "$TMPHOME/.claude"
+set +e
+ARGV3g="$(HOME="$TMPHOME" CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
+    bwrap_argv_build "$TMPHOME" /test/.runtime/claude)"
+set -e
+# The bind still emits ~/.claude as both source and destination —
+# bwrap follows the symlink at mount time, mounting the shared dir
+# writably at the destination inside the sandbox.
+assert_contains scenario3g "$ARGV3g" "$TMPHOME/.claude"
 
 # --- Scenario 4: CLAUDE_SANDBOX_FRESH_PROC=0 swaps --proc for --ro-bind /proc ---
 # Triggered by the shadow's launch-time probe when seccomp blocks
@@ -178,7 +204,7 @@ assert_contains scenario3f "$ARGV3f" \
 set +e
 ARGV4="$(HOME=/root CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
     CLAUDE_SANDBOX_FRESH_PROC=0 \
-    bwrap_argv_build /workspaces/foo /opt/claude/bin/claude)"
+    bwrap_argv_build /workspaces/foo /test/.runtime/claude)"
 set -e
 # In degraded mode the fresh-proc mount is gone and the bind-/proc pair
 # is present. grep -A1 matches the line *after* the flag so we assert
@@ -190,6 +216,29 @@ else
     echo "FAIL: scenario4 — expected --ro-bind /proc /proc fallback pair" >&2
 fi
 assert_not_contains scenario4 "$ARGV4" "--proc"
+
+# --- Scenario 5: real_claude present → bind appears at ~/.local/bin/claude ---
+# Without this bind the strict-under-/root tmpfs hides ~/.local/bin/claude,
+# and Claude Code's installMethod=native self-check warns "claude command
+# not found at /root/.local/bin/claude" on every launch.
+TMPREALCLAUDE="$(mktemp)"
+trap 'rm -rf "$TMPHOME" "$TMPSHARED"; rm -f "$TMPREALCLAUDE"' EXIT
+chmod 0755 "$TMPREALCLAUDE"
+set +e
+ARGV5="$(HOME=/root CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
+    bwrap_argv_build /workspaces/foo "$TMPREALCLAUDE")"
+set -e
+assert_contains scenario5 "$ARGV5" "$TMPREALCLAUDE"
+assert_contains scenario5 "$ARGV5" "/root/.local/bin/claude"
+
+# Scenario 5b: real_claude missing → no bind line for ~/.local/bin/claude.
+# The shadow refuses to launch in this case anyway; this just makes sure
+# the argv builder doesn't emit a broken --bind that would abort bwrap.
+set +e
+ARGV5b="$(HOME=/root CLAUDE_SANDBOX_GITCONFIG_PATH=/etc/claude-gitconfig \
+    bwrap_argv_build /workspaces/foo /nonexistent/path/to/claude)"
+set -e
+assert_not_contains scenario5b "$ARGV5b" "/root/.local/bin/claude"
 
 echo "bwrap_argv.sh: $PASSED passed / $FAILED failed"
 [ "$FAILED" -eq 0 ]

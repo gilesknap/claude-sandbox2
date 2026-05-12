@@ -65,8 +65,8 @@ class InstallResult:
             print(f"  skipped {kind} {name} (already up to date)")
         for name in self.refused_different:
             print(
-                f"  refused {kind} {name} — workspace copy differs. Re-run with --force "
-                f"to overwrite, or reconcile by hand.",
+                f"  refused {kind} {name} — workspace copy differs. Re-run with "
+                f"--force to overwrite, or reconcile by hand.",
                 file=sys.stderr,
             )
 
@@ -132,11 +132,13 @@ def list_skills(src_dir: Path) -> list[str]:
     root = src_dir / ".claude" / "skills"
     if not root.is_dir():
         return []
-    return sorted(p.name for p in root.iterdir() if p.is_dir() and (p / "SKILL.md").is_file())
+    return sorted(
+        p.name for p in root.iterdir() if p.is_dir() and (p / "SKILL.md").is_file()
+    )
 
 
 def list_commands(src_dir: Path) -> list[str]:
-    """Sorted command names (`*.md` basename without extension) under `<src>/.claude/commands/`."""
+    """Sorted command names (`*.md` basenames) under `<src>/.claude/commands/`."""
     root = src_dir / ".claude" / "commands"
     if not root.is_dir():
         return []
@@ -162,7 +164,9 @@ def _install(
     src_root = src_dir / ".claude" / ("skills" if kind == "skill" else "commands")
     dst_root = workspace / ".claude" / ("skills" if kind == "skill" else "commands")
 
-    resolved = _resolve_names(names, available, src_dir, all_=all_, bundle=bundle, kind=kind)
+    resolved = _resolve_names(
+        names, available, src_dir, all_=all_, bundle=bundle, kind=kind
+    )
 
     result = InstallResult()
     if not resolved:
@@ -217,7 +221,9 @@ def _resolve_names(
         return bundle_entries
 
     if not names:
-        raise SkillInstallerError(f"no {kind}s requested. Pass NAME(s), --all, or --bundle NAME.")
+        raise SkillInstallerError(
+            f"no {kind}s requested. Pass NAME(s), --all, or --bundle NAME."
+        )
 
     resolved: list[str] = []
     seen: set[str] = set()
@@ -270,7 +276,8 @@ def _read_bundle(src_dir: Path, bundle: str, kind: str) -> list[str]:
             )
         except (FileNotFoundError, ModuleNotFoundError) as exc:
             raise BundleNotFoundError(
-                f"bundles.toml not found under {src_dir}; cannot resolve --bundle {bundle}."
+                f"bundles.toml not found under {src_dir}; cannot resolve "
+                f"--bundle {bundle}."
             ) from exc
         data = tomllib.loads(bundles_text)
     else:
@@ -281,7 +288,8 @@ def _read_bundle(src_dir: Path, bundle: str, kind: str) -> list[str]:
     if bundle not in bundles:
         available = ", ".join(sorted(bundles.keys())) or "<none>"
         raise BundleNotFoundError(
-            f"bundle '{bundle}' not defined in bundles.toml. Available bundles: {available}"
+            f"bundle '{bundle}' not defined in bundles.toml. "
+            f"Available bundles: {available}"
         )
     entry = bundles[bundle] or {}
     plural = "skills" if kind == "skill" else "commands"
@@ -367,7 +375,9 @@ def _trees_byte_equal(a: Path, b: Path) -> bool:
         return False
     # filecmp.dircmp.diff_files is stat-based; re-confirm with a real
     # byte compare so mtime drift doesn't trick us.
-    matches, mismatches, errors = filecmp.cmpfiles(a, b, cmp.common_files, shallow=False)
+    matches, mismatches, errors = filecmp.cmpfiles(
+        a, b, cmp.common_files, shallow=False
+    )
     if mismatches or errors:
         return False
     return all(_trees_byte_equal(a / sub, b / sub) for sub in cmp.common_dirs)
