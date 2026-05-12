@@ -13,7 +13,12 @@
 
 set -euo pipefail
 
-REAL_CLAUDE="$HOME/.local/bin/claude"
+# Real Claude lives off the user's PATH so plain `claude` always
+# resolves to /usr/local/bin/claude (this shadow). The official
+# claude.ai installer drops the binary at ~/.local/bin/claude AND
+# prepends ~/.local/bin to the user's shell rc; the installer
+# relocates it here so that rc-mutation becomes inert.
+REAL_CLAUDE="/usr/libexec/claude-sandbox/claude"
 GITCONFIG_PATH="/etc/claude-gitconfig"
 
 # Test hook: source-only mode lets tests pull `bwrap_argv_build` into
@@ -23,9 +28,11 @@ GITCONFIG_PATH="/etc/claude-gitconfig"
 
 # Recursion guard: if IS_SANDBOX=1 is already set we are inside the
 # sandbox (e.g. a hook or skill spawned `claude`), so fall through to
-# the real binary directly.
+# the real binary directly. Inside the sandbox the real binary is
+# bind-mounted at ~/.local/bin/claude — exec that path so argv[0]
+# matches the conventional install location.
 if [ "$CLAUDE_SHADOW_SOURCE_ONLY" != "1" ] && [ "${IS_SANDBOX:-}" = "1" ]; then
-    exec "$REAL_CLAUDE" "$@"
+    exec "${HOME:-/root}/.local/bin/claude" "$@"
 fi
 
 # Export so the inlined bwrap_argv_build picks up the gitconfig path.
@@ -85,11 +92,18 @@ bwrap_argv_build() {
             argv+=( --bind "$home/$rel" "$home/$rel" )
         fi
     done
-    for rel in .claude.json .local/bin/uv .local/bin/uvx .local/bin/claude; do
+    for rel in .claude.json .local/bin/uv .local/bin/uvx; do
         if [ -f "$home/$rel" ]; then
             argv+=( --bind "$home/$rel" "$home/$rel" )
         fi
     done
+
+    # Real binary lives off-PATH on the host; expose it inside the
+    # sandbox at the conventional ~/.local/bin/claude location so
+    # Claude's self-inspection and any internal claude-spawns-claude
+    # path lookups see the path they expect. Unconditional — the
+    # shadow's loud-fail upstream catches a missing real binary.
+    argv+=( --bind "$real_claude" "$home/.local/bin/claude" )
 
     if [ -n "$workspace" ] && [ -d "$workspace" ]; then
         argv+=( --bind "$workspace" "$workspace" )
@@ -144,7 +158,9 @@ bwrap_argv_build() {
         fi
     done
 
-    argv+=( -- "$real_claude" "$@" )
+    # Exec via the in-sandbox conventional path so Claude's argv[0]
+    # matches what the official installer would have placed.
+    argv+=( -- "$home/.local/bin/claude" "$@" )
     printf '%s\n' "${argv[@]}"
 }
 

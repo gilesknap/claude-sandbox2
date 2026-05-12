@@ -102,9 +102,13 @@ assert_contains scenario1 "$ARGV1" "GIT_CONFIG_GLOBAL"
 assert_contains scenario1 "$ARGV1" "/etc/claude-gitconfig"
 assert_contains scenario1 "$ARGV1" "GIT_CONFIG_SYSTEM"
 assert_contains scenario1 "$ARGV1" "/dev/null"
-# Final terminator and real claude path.
+# Final terminator and real claude path. The real binary is bound
+# from its off-PATH host location to the conventional in-sandbox
+# ~/.local/bin/claude, and bwrap execs the in-sandbox path.
 assert_contains scenario1 "$ARGV1" "--"
 assert_contains scenario1 "$ARGV1" "/test/.local/bin/claude"
+assert_pair scenario1 "$ARGV1" "--bind" "/test/.local/bin/claude"
+assert_contains scenario1 "$ARGV1" "/root/.local/bin/claude"
 # /run/secrets mask only when the host has it.
 if [ -d /run/secrets ]; then
     assert_contains scenario1 "$ARGV1" "/run/secrets"
@@ -143,7 +147,9 @@ assert_not_contains scenario4a "$ARGV4a" "$TMPHOME/.local/share/uv"
 assert_not_contains scenario4a "$ARGV4a" "$TMPHOME/.claude.json"
 assert_not_contains scenario4a "$ARGV4a" "$TMPHOME/.local/bin/uv"
 assert_not_contains scenario4a "$ARGV4a" "$TMPHOME/.local/bin/uvx"
-assert_not_contains scenario4a "$ARGV4a" "$TMPHOME/.local/bin/claude"
+# Note: $TMPHOME/.local/bin/claude IS expected — it's the unconditional
+# bind dest for the off-PATH real binary, regardless of $HOME state.
+assert_contains scenario4a "$ARGV4a" "$TMPHOME/.local/bin/claude"
 
 # Now populate the full set and re-check.
 mkdir -p "$TMPHOME/.cache" "$TMPHOME/.config/glab-cli" "$TMPHOME/.local/share/uv" "$TMPHOME/.local/bin"

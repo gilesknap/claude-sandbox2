@@ -32,8 +32,11 @@ re-establishes the shadow without re-downloading Claude.
 ## What you get
 
 - A shadow `/usr/local/bin/claude` that auto-wraps the real Claude
-  binary (parked at `~/.local/bin/claude`, where Anthropic's installer
-  drops it) in a `bwrap` sandbox with `--ro-bind / /` + `--tmpfs $HOME`,
+  binary (relocated to `/usr/libexec/claude-sandbox/claude` so it sits
+  off the user's PATH — Anthropic's installer drops it at
+  `~/.local/bin/claude` and prepends `~/.local/bin` to your shell rc,
+  which would otherwise let plain `claude` bypass the shadow) in a
+  `bwrap` sandbox with `--ro-bind / /` + `--tmpfs $HOME`,
   `--clearenv`, `--cap-drop ALL`, `--unshare-pid/ipc/uts`,
   TIOCSTI defence via `script(1)`, and the rest of the threat model.
 - A curated `/etc/claude-gitconfig` so `git push` works inside the

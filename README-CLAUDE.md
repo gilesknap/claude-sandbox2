@@ -181,11 +181,13 @@ Claude. The deliberate exposures are:
   PATH so `uv` resolves without a full path; appended, not
   prepended, so a malicious binary in `~/.local/bin/<sysname>`
   cannot hijack a standard command.
-- **`/root/.local/bin/claude`** (read, single file). The real Claude
-  binary Anthropic's installer drops here. The shadow exec's this
-  same file via `bwrap`, and bind-mounting it back inside the
-  sandbox keeps Claude Code's `installMethod=native` self-check
-  happy.
+- **`/usr/libexec/claude-sandbox/claude`** (read, single file). The
+  real Claude binary, relocated here by the installer from
+  `~/.local/bin/claude` so plain `claude` on the user's PATH always
+  resolves to the shadow at `/usr/local/bin/claude` instead. The
+  shadow exec's this same file via `bwrap`, and the bind back to
+  `~/.local/bin/claude` inside the sandbox keeps Claude Code's
+  `installMethod=native` self-check happy.
 - **Network** (`--share-net`). Claude needs to reach
   `api.anthropic.com` and (if you use them) GitHub / GitLab over
   HTTPS. Because the network namespace is shared with the host,
@@ -234,10 +236,11 @@ the prompt if the sandbox is not intact.
 Container-scoped (re-established by re-running `sudo ./install`,
 typically wired into `postCreate.sh` for the devcontainer rebuild):
 
-- `~/.local/bin/claude` — the real Claude Code binary, dropped here
-  by Anthropic's installer (`curl -fsSL https://claude.ai/install.sh
-  | bash`). The shadow at `/usr/local/bin/claude` wraps and exec's
-  this binary; no clone-internal copy.
+- `/usr/libexec/claude-sandbox/claude` — the real Claude Code binary.
+  Anthropic's installer (`curl -fsSL https://claude.ai/install.sh |
+  bash`) drops it at `~/.local/bin/claude` and prepends
+  `~/.local/bin` to your shell rc; the installer relocates it off
+  PATH so the shadow at `/usr/local/bin/claude` always wins.
 - `/usr/local/bin/claude` — a shadow (copied verbatim from
   `.devcontainer/claude-sandbox/claude-shadow`) that wraps the real
   binary in a `bwrap` sandbox. Falls through to the real binary when

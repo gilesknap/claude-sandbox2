@@ -72,14 +72,33 @@ EOF
     fi
 }
 
+# install_claude_binary: fetch the real Claude via the official
+# installer, then relocate it to a path that is NOT on the user's
+# PATH. The official installer drops the binary at ~/.local/bin/claude
+# AND prepends ~/.local/bin to the user's shell rc — meaning plain
+# `claude` would resolve past our shadow once a new shell starts. By
+# moving the binary to /usr/libexec/claude-sandbox/, ~/.local/bin/
+# stays empty and the rc-mutation becomes harmless.
 install_claude_binary() {
     if [ "$SMOKE" = "1" ]; then
         return 0
     fi
-    if [ -x "$HOME/.local/bin/claude" ]; then
+    local real_dest
+    real_dest="$(prefixed /usr/libexec/claude-sandbox/claude)"
+    if [ -x "$real_dest" ]; then
+        # Idempotent: purge any stale copy a prior curl-install may have
+        # left at ~/.local/bin/claude so the shadow remains the only
+        # `claude` on the user's PATH.
+        rm -f "$HOME/.local/bin/claude"
         return 0
     fi
     curl -fsSL https://claude.ai/install.sh | bash
+    if [ ! -x "$HOME/.local/bin/claude" ]; then
+        echo "claude-sandbox: official installer did not produce \$HOME/.local/bin/claude" >&2
+        exit 1
+    fi
+    mkdir -p "$(dirname "$real_dest")"
+    mv "$HOME/.local/bin/claude" "$real_dest"
 }
 
 install_shadow() {
@@ -194,10 +213,10 @@ EOF
 
 main() {
     probe_or_refuse
-    # Shadow first: with /usr/local/bin/claude in place before
-    # ~/.local/bin/claude exists, any `claude` lookup during the rest
-    # of install resolves (and bash-hashes) to the shadow path, even
-    # if the shadow itself transiently fails because bwrap or the real
+    # Shadow first: with /usr/local/bin/claude in place before the
+    # official installer runs, any `claude` lookup during the rest of
+    # install resolves (and bash-hashes) to the shadow path, even if
+    # the shadow itself transiently fails because bwrap or the real
     # binary haven't landed yet.
     install_shadow
     apt_install
@@ -208,8 +227,9 @@ main() {
     wire_settings_hook
 
     echo "claude-sandbox: install complete."
-    echo "  shadow: $(prefixed /usr/local/bin/claude)"
-    echo "  workspace: $WORKSPACE"
+    echo "  shadow:      $(prefixed /usr/local/bin/claude)"
+    echo "  real claude: $(prefixed /usr/libexec/claude-sandbox/claude)"
+    echo "  workspace:   $WORKSPACE"
     echo "  run \`/verify-sandbox\` inside Claude for the live battery."
 }
 
