@@ -101,51 +101,25 @@ install_claude_binary() {
     mv "$HOME/.local/bin/claude" "$real_dest"
 }
 
-install_shadow() {
-    local dest
-    dest="$(prefixed /usr/local/bin/claude)"
-    mkdir -p "$(dirname "$dest")"
-    # install(1) sets mode atomically; if the dest exists with identical
-    # content, install -C is a no-op. Some older coreutils lack -C;
-    # diff-then-skip falls back cleanly.
-    local src="$SCRIPT_DIR/claude-shadow"
-    if [ -f "$dest" ] && cmp -s "$src" "$dest"; then
+# install_file: byte-stable copy of src → dst at mode 0755. Refuses
+# if src is missing (loud-fail beats a downstream errno). cmp -s
+# short-circuits so a re-run is a true no-op when content matches.
+install_file() {
+    local src="$1" dst="$2"
+    if [ ! -f "$src" ]; then
+        echo "claude-sandbox: cannot find $src" >&2
+        exit 1
+    fi
+    mkdir -p "$(dirname "$dst")"
+    if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
         return 0
     fi
-    install -m 0755 "$src" "$dest"
+    install -m 0755 "$src" "$dst"
 }
 
 ensure_cred_dirs() {
     mkdir -p "$HOME/.config/gh" "$HOME/.config/glab-cli"
     touch "$HOME/.claude.json"
-}
-
-place_workspace_hook() {
-    local src="$REPO_ROOT/.claude/hooks/sandbox-check.sh"
-    local dst="$WORKSPACE/.claude/hooks/sandbox-check.sh"
-    if [ ! -f "$src" ]; then
-        echo "claude-sandbox: cannot find $src" >&2
-        exit 1
-    fi
-    mkdir -p "$(dirname "$dst")"
-    if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
-        return 0
-    fi
-    install -m 0755 "$src" "$dst"
-}
-
-place_workspace_statusline() {
-    local src="$REPO_ROOT/.claude/statusline-command.sh"
-    local dst="$WORKSPACE/.claude/statusline-command.sh"
-    if [ ! -f "$src" ]; then
-        echo "claude-sandbox: cannot find $src" >&2
-        exit 1
-    fi
-    mkdir -p "$(dirname "$dst")"
-    if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
-        return 0
-    fi
-    install -m 0755 "$src" "$dst"
 }
 
 # wire_settings_hook: surgical UserPromptSubmit-hook merge into
@@ -200,24 +174,15 @@ EOF
         exit 1
     fi
 
-    local has_ours
-    has_ours="$(jq -r --arg base "sandbox-check.sh" --arg cmd "$hook_cmd" '
-        (.hooks.UserPromptSubmit // [])
-        | map(.hooks // [])
-        | flatten
-        | any(.command == $cmd)
-    ' "$settings")"
-    if [ "$has_ours" = "true" ]; then
-        return 0
-    fi
-
     local merged tmp
     merged="$(jq --arg cmd "$hook_cmd" '
         .hooks //= {}
         | .hooks.UserPromptSubmit //= []
-        | .hooks.UserPromptSubmit += [
-            {hooks: [{type: "command", command: $cmd}]}
-          ]
+        | if any(.hooks.UserPromptSubmit[].hooks[]?; .command == $cmd) then .
+          else .hooks.UserPromptSubmit += [
+              {hooks: [{type: "command", command: $cmd}]}
+            ]
+          end
     ' "$settings")"
     tmp="$(mktemp "$settings.XXXXXX")"
     printf '%s\n' "$merged" > "$tmp"
@@ -255,13 +220,15 @@ main() {
     # install resolves (and bash-hashes) to the shadow path, even if
     # the shadow itself transiently fails because bwrap or the real
     # binary haven't landed yet.
-    install_shadow
+    install_file "$SCRIPT_DIR/claude-shadow" "$(prefixed /usr/local/bin/claude)"
     apt_install
     probe_userns_or_refuse
     install_claude_binary
     ensure_cred_dirs
-    place_workspace_hook
-    place_workspace_statusline
+    install_file "$REPO_ROOT/.claude/hooks/sandbox-check.sh" \
+                 "$WORKSPACE/.claude/hooks/sandbox-check.sh"
+    install_file "$REPO_ROOT/.claude/statusline-command.sh" \
+                 "$WORKSPACE/.claude/statusline-command.sh"
     wire_settings_hook
     wire_settings_statusline
 
