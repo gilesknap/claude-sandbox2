@@ -6,3 +6,7 @@
 set -euo pipefail
 
 mkdir -p "$HOME/.config/terminal-config/.claude"
+# Claude keeps account-link state (oauthAccount, onboarding flags) in
+# ~/.claude.json — a sibling of ~/.claude, not a child. Bind-mounting a
+# single file requires the source to pre-exist, so ensure it.
+touch "$HOME/.config/terminal-config/.claude.json"

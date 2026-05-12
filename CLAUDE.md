@@ -1,14 +1,6 @@
-# claude-sandbox: working notes for Claude
+# claude-sandbox
 
-This file documents project conventions for Claude when running on
-this repo. The threat model and sandbox model live in
-`README-CLAUDE.md`; the executable spec for the sandbox checks lives
-in `.claude/commands/verify-sandbox.md`.
+Bash-only. No Python package, no uv, no pytest — don't add them back.
 
-## What this project is
-
-A bwrap-isolated wrapper for Claude Code that installs into Debian/Ubuntu
-devcontainers. The shadow `/usr/local/bin/claude` wraps the real
-binary in `bwrap` with strict-under-`/root` inversion, `--clearenv`,
-`--cap-drop ALL`, and the rest of the threat model documented in
-`README-CLAUDE.md`.
+- Threat model + sandbox model: `README-CLAUDE.md`
+- Sandbox-integrity spec: `.claude/commands/verify-sandbox.md`
