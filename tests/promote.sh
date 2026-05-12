@@ -94,6 +94,7 @@ expect_byte_equal() {
 expect_byte_equal "$REPO_ROOT/.devcontainer/claude-sandbox/install.sh"    "$TARGET/.devcontainer/claude-sandbox/install.sh"
 expect_byte_equal "$REPO_ROOT/.devcontainer/claude-sandbox/claude-shadow" "$TARGET/.devcontainer/claude-sandbox/claude-shadow"
 expect_byte_equal "$REPO_ROOT/.devcontainer/claude-sandbox/promote.sh"    "$TARGET/.devcontainer/claude-sandbox/promote.sh"
+expect_byte_equal "$REPO_ROOT/justfile"                                   "$TARGET/justfile"
 
 # Root `install` shim must NOT land in the target.
 if [ ! -e "$TARGET/install" ]; then

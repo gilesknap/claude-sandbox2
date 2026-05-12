@@ -1,15 +1,6 @@
-# claude-sandbox recipes. Run `just <recipe>` from the repo root.
-
-# Run the bash test suite.
-test:
-    bash tests/bwrap_argv.sh
-    CLAUDE_SANDBOX_SMOKE=1 bash tests/smoke.sh
-    bash tests/promote.sh
-
-# Pull the latest tip and re-run the installer.
-upgrade:
-    git pull --ff-only
-    bash install
+# claude-sandbox recipes. Shipped verbatim into promoted targets via
+# `just promote`, so every recipe here must be useful in both the
+# source clone and a promoted host workspace.
 
 # Seed the sandbox's curated `.claude/` (commands, skills, hooks,
 # statusline, sandbox-check hook) into a target host workspace. See
@@ -58,7 +49,3 @@ glab-auth hostname="gitlab.com":
     echo "$t" | glab auth login --stdin --hostname {{ hostname }} --git-protocol https
     unset t
     glab auth status
-
-# Reminder for the canonical live security battery.
-verify:
-    @echo "Run /verify-sandbox inside a Claude session to run the live 16-check battery + 10 breakout probes."

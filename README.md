@@ -44,7 +44,7 @@ cd claude-sandbox
 The clone lives on the host under `~/.config/terminal-config`, so it
 survives devcontainer rebuilds and is reusable from every
 devcontainer that mounts the same terminal-config dir — one clone,
-one `just upgrade` cadence, every project sandboxed.
+every project sandboxed.
 
 ## What you get
 
@@ -88,10 +88,11 @@ lives at `.claude/commands/verify-sandbox.md`.
 ## Upgrading
 
 ```
-just upgrade
+git pull --ff-only && bash install
 ```
 
-Equivalent to `git pull --ff-only && bash install`.
+The installer is idempotent; the shadow is re-established without
+re-downloading Claude.
 
 ## Promoting into a host workspace
 
@@ -149,12 +150,13 @@ never enter shell history.
 ```
 git clone https://github.com/gilesknap/claude-sandbox.git
 cd claude-sandbox
-just test
+bash tests/bwrap_argv.sh
+bash tests/smoke.sh
+bash tests/promote.sh
 ```
 
-`just test` runs `bash tests/bwrap_argv.sh` and a sandboxed
-`bash tests/smoke.sh`. No `uv sync`, no pytest, no twine — bash all
-the way down.
+Same three commands CI runs. No `uv sync`, no pytest, no twine —
+bash all the way down.
 
 The repo's own `.claude/` IS the canonical source of shipped skills,
 commands, and hooks — editing one updates both how Claude behaves on
