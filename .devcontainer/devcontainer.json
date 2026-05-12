@@ -50,12 +50,6 @@
             "source": "${localEnv:HOME}/.config/terminal-config/.claude.json",
             "target": "/root/.claude.json",
             "type": "bind"
-        },
-        // Keep a persistent cross-container cache.
-        {
-            "source": "devcontainer-shared-cache",
-            "target": "/cache",
-            "type": "volume"
         }
     ],
     // Mount the parent as /workspaces so peer clones are reachable.
