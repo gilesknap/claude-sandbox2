@@ -1,0 +1,229 @@
+#!/usr/bin/env bash
+# claude-sandbox installer (bash-only). Idempotent: re-runs after a
+# devcontainer rebuild re-establish container state without disturbing
+# workspace edits.
+#
+# Two configurable seams for tests:
+#   INSTALL_PREFIX   (default /)   — root of file placement, so
+#                                    tests/smoke.sh can drop everything
+#                                    into a tmpdir.
+#   INSTALL_WORKSPACE (default $PWD) — workspace whose `.claude/` gets
+#                                    the settings+hook wired in.
+#   CLAUDE_SANDBOX_SMOKE=1            skip apt + curl-install-claude.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# REPO_ROOT is the clone — two levels above .devcontainer/claude-sandbox.
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+PREFIX="${INSTALL_PREFIX:-/}"
+WORKSPACE="${INSTALL_WORKSPACE:-$PWD}"
+SMOKE="${CLAUDE_SANDBOX_SMOKE:-0}"
+
+# Resolve a target under $PREFIX. Stripping the leading slash lets us
+# compose relative-to-prefix paths cleanly without a `//` between root
+# and the absolute path.
+prefixed() {
+    local abs="$1"
+    if [ "$PREFIX" = "/" ]; then
+        printf '%s\n' "$abs"
+    else
+        printf '%s\n' "${PREFIX%/}${abs}"
+    fi
+}
+
+probe_or_refuse() {
+    if [ "$SMOKE" = "1" ]; then
+        return 0
+    fi
+    if ! command -v apt-get >/dev/null 2>&1; then
+        echo "claude-sandbox: refusing — Debian/Ubuntu only (no apt-get on PATH)." >&2
+        exit 1
+    fi
+}
+
+apt_install() {
+    if [ "$SMOKE" = "1" ]; then
+        return 0
+    fi
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    apt-get install -y -qq --no-install-recommends \
+        bubblewrap just jq curl ca-certificates git nodejs gh
+    # glab isn't in every Ubuntu repo; install-try.
+    apt-get install -y -qq --no-install-recommends glab 2>/dev/null || true
+}
+
+probe_userns_or_refuse() {
+    if [ "$SMOKE" = "1" ]; then
+        return 0
+    fi
+    if ! bwrap --ro-bind / / --unshare-user-try --unshare-pid -- /bin/true \
+            >/dev/null 2>&1; then
+        cat >&2 <<'EOF'
+claude-sandbox: refusing — kernel unprivileged user namespaces are
+forbidden. The bwrap sandbox cannot start without them.
+
+On Ubuntu 24.04:
+    sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+On rootful Docker with default AppArmor: rebuild the devcontainer
+under rootless podman, or relax AppArmor for bwrap.
+EOF
+        exit 1
+    fi
+}
+
+install_claude_binary() {
+    if [ "$SMOKE" = "1" ]; then
+        return 0
+    fi
+    if [ -x "$HOME/.local/bin/claude" ]; then
+        return 0
+    fi
+    curl -fsSL https://claude.ai/install.sh | bash
+}
+
+install_shadow() {
+    local dest
+    dest="$(prefixed /usr/local/bin/claude)"
+    mkdir -p "$(dirname "$dest")"
+    # install(1) sets mode atomically; if the dest exists with identical
+    # content, install -C is a no-op. Some older coreutils lack -C;
+    # diff-then-skip falls back cleanly.
+    local src="$SCRIPT_DIR/claude-shadow"
+    if [ -f "$dest" ] && cmp -s "$src" "$dest"; then
+        return 0
+    fi
+    install -m 0755 "$src" "$dest"
+}
+
+ensure_cred_dirs() {
+    mkdir -p "$HOME/.config/gh" "$HOME/.config/glab-cli"
+    touch "$HOME/.claude.json"
+}
+
+link_terminal_config() {
+    local shared="/user-terminal-config/.claude"
+    local link="$HOME/.claude"
+    if [ ! -d "$shared" ]; then
+        return 0
+    fi
+    if [ -L "$link" ] && [ "$(readlink "$link")" = "$shared" ]; then
+        return 0
+    fi
+    if [ -e "$link" ] && [ ! -L "$link" ]; then
+        # Real directory present — refuse rather than clobber user state.
+        echo "claude-sandbox: $link is a real directory; refusing to clobber. Move it aside and re-run." >&2
+        return 0
+    fi
+    ln -snf "$shared" "$link"
+}
+
+place_workspace_hook() {
+    local src="$REPO_ROOT/.claude/hooks/sandbox-check.sh"
+    local dst="$WORKSPACE/.claude/hooks/sandbox-check.sh"
+    if [ ! -f "$src" ]; then
+        echo "claude-sandbox: cannot find $src" >&2
+        exit 1
+    fi
+    mkdir -p "$(dirname "$dst")"
+    if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
+        return 0
+    fi
+    install -m 0755 "$src" "$dst"
+}
+
+# wire_settings_hook: surgical UserPromptSubmit-hook merge into
+# <workspace>/.claude/settings.json.
+#   - file absent → write minimal {"hooks":{"UserPromptSubmit":[...]}}.
+#   - file parses as JSON via jq → merge, dedup by command basename.
+#   - file is JSONC (jq parse fails) → refuse with paste-this snippet.
+#   - existing entry with same basename but different command → refuse.
+wire_settings_hook() {
+    local settings="$WORKSPACE/.claude/settings.json"
+    local hook_cmd=".claude/hooks/sandbox-check.sh"
+    mkdir -p "$(dirname "$settings")"
+
+    local minimal
+    minimal="$(jq -n --arg cmd "$hook_cmd" '{
+        hooks: {
+            UserPromptSubmit: [
+                {hooks: [{type: "command", command: $cmd}]}
+            ]
+        }
+    }')"
+
+    if [ ! -f "$settings" ]; then
+        printf '%s\n' "$minimal" > "$settings"
+        chmod 0644 "$settings"
+        return 0
+    fi
+
+    if ! jq -e . "$settings" >/dev/null 2>&1; then
+        cat >&2 <<EOF
+claude-sandbox: refusing — $settings is JSONC (jq parse failed).
+Please paste the following snippet by hand into the file:
+
+$minimal
+
+EOF
+        exit 1
+    fi
+
+    # Dedup by command basename. If an entry with basename
+    # sandbox-check.sh exists with a *different* command, refuse.
+    local existing_conflict
+    existing_conflict="$(jq -r --arg base "sandbox-check.sh" --arg cmd "$hook_cmd" '
+        (.hooks.UserPromptSubmit // [])
+        | map(.hooks // [])
+        | flatten
+        | map(select(.command != null and (.command | split("/") | last) == $base and .command != $cmd))
+        | .[0].command // empty
+    ' "$settings")"
+    if [ -n "$existing_conflict" ]; then
+        echo "claude-sandbox: refusing — $settings already has a sandbox-check.sh hook at '$existing_conflict' that differs from our '$hook_cmd'. Reconcile manually." >&2
+        exit 1
+    fi
+
+    local has_ours
+    has_ours="$(jq -r --arg base "sandbox-check.sh" --arg cmd "$hook_cmd" '
+        (.hooks.UserPromptSubmit // [])
+        | map(.hooks // [])
+        | flatten
+        | any(.command == $cmd)
+    ' "$settings")"
+    if [ "$has_ours" = "true" ]; then
+        return 0
+    fi
+
+    local merged tmp
+    merged="$(jq --arg cmd "$hook_cmd" '
+        .hooks //= {}
+        | .hooks.UserPromptSubmit //= []
+        | .hooks.UserPromptSubmit += [
+            {hooks: [{type: "command", command: $cmd}]}
+          ]
+    ' "$settings")"
+    tmp="$(mktemp "$settings.XXXXXX")"
+    printf '%s\n' "$merged" > "$tmp"
+    chmod 0644 "$tmp"
+    mv "$tmp" "$settings"
+}
+
+main() {
+    probe_or_refuse
+    apt_install
+    probe_userns_or_refuse
+    install_claude_binary
+    install_shadow
+    ensure_cred_dirs
+    link_terminal_config
+    place_workspace_hook
+    wire_settings_hook
+
+    echo "claude-sandbox: install complete."
+    echo "  shadow: $(prefixed /usr/local/bin/claude)"
+    echo "  workspace: $WORKSPACE"
+    echo "  run \`/verify-sandbox\` inside Claude for the live battery."
+}
+
+main "$@"

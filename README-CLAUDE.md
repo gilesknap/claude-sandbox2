@@ -38,7 +38,10 @@ a UX failure mode that gets people pwned.
 - X11 reachability via shared network namespace — `DISPLAY`
   scrubbed, `.Xauthority` masked with `/dev/null`.
 - TIOCSTI terminal-injection back to the parent shell — blocked by
-  `--new-session` (calls `setsid()`).
+  `--dev /dev` (fresh devpts; host `/dev/pts` invisible) combined
+  with the `script(1)` pty wrap around `bwrap` (any TIOCSTI lands in
+  script's pty, which forwards bytes — not keystrokes — to the host
+  terminal).
 - Privilege escalation via `sudo` / `su` / `doas` — denied by zero
   capabilities (`--cap-drop ALL`) and `NO_NEW_PRIVS` (implicit in
   `bwrap`'s `exec`).
@@ -81,7 +84,7 @@ to verify them all).
 | PID namespace (kill/ptrace scoping) | `--unshare-pid` | check 07 |
 | SysV IPC namespace | `--unshare-ipc` | check 08 |
 | UTS namespace | `--unshare-uts` | check 09 |
-| TIOCSTI terminal injection blocked | `--new-session` | check 10 |
+| TIOCSTI terminal injection blocked | `--dev /dev` + `script(1)` pty wrap | check 10 |
 | VS Code IPC bridges masked | `--tmpfs /tmp` | check 11 |
 | User runtime dir masked | `--tmpfs /run/user` | check 12 |
 | Docker/Compose secrets masked | `--tmpfs /run/secrets` | check 13 |
@@ -97,39 +100,28 @@ on first use rather than silently.
 Implicit: `--die-with-parent` (the sandbox disappears the moment
 Claude does).
 
-### Procfs view: what `--unshare-pid` does NOT deliver on rootless devcontainers
+### Procfs view: host PIDs are always visible (accepted info-disclosure)
 
 `--unshare-pid` reliably gives kernel-level pidns isolation (the
 sandbox cannot `kill()` or `ptrace()` host or devcontainer processes
 — check 07 verifies this via `/proc/self/status:NSpid:`). The
 companion property — `/proc` reflecting *only* the sandbox's own
 process tree — depends on bwrap successfully mounting procfs against
-the new pidns. On rootless nested-userns hosts (the standard VS Code
-devcontainer pattern, where the outer container has no host
-`CAP_SYS_ADMIN`), bwrap mounts procfs against its *outer* pidns
-instead, so the sandbox's `/proc` enumerates host PIDs. We tested
-`unshare(1) --user --pid --fork --mount-proc --map-root-user` as a
-prefix to bwrap and it `EPERM`s on `mount("proc")` for the same
-underlying reason: kernel-locked parent mount.
+the new pidns, which fails on rootless nested-userns hosts (the
+standard VS Code devcontainer pattern).
 
-Implication for the threat model: this is **information disclosure**
-(Claude can see the user's process tree and command lines), **not
-credential exfil**. The credential-bearing procfs entries —
-`/proc/<pid>/environ`, `/maps`, `/fd`, `/mem`, `/cwd` — are gated by
-`PTRACE_MODE_READ_FSCREDS`, which under YAMA `ptrace_scope=1` (the
-Ubuntu/Debian default and what every devcontainer base image ships)
-is restricted to the caller's descendants. The sandbox has no
-descendant relationship with VS Code, terminal sessions, or other
-devcontainer processes, so those reads `EACCES`.
-
-The launch-time probe in `claude-shadow` detects whether procfs is
-properly aligned with the new pidns (it tests `$$ ==
-/proc/self/status:Pid:` inside a probe bwrap) and exports
-`CLAUDE_SANDBOX_FRESH_PROC=0/1` accordingly. On hosts where it works
-(Linux desktops with full bwrap privileges) check 07 plus the
-process-tree view are both clean. On rootless devcontainers check 07
-still passes (kernel pidns isolation is intact) and a one-line
-warning is printed on stderr at launch.
+`claude-sandbox` always emits `--ro-bind /proc /proc` rather than
+probing. Host PIDs are enumerable from inside the sandbox. This is
+**information disclosure** (Claude can see the user's process tree
+and command lines), **not credential exfil**. The credential-bearing
+procfs entries — `/proc/<pid>/environ`, `/maps`, `/fd`, `/mem`,
+`/cwd` — are gated by `PTRACE_MODE_READ_FSCREDS`, which under YAMA
+`ptrace_scope=1` (the Ubuntu/Debian default and what every
+devcontainer base image ships) is restricted to the caller's
+descendants. The sandbox has no descendant relationship with VS
+Code, terminal sessions, or other devcontainer processes, so those
+reads `EACCES`. Check 07 still passes — kernel pidns isolation is
+intact.
 
 ## What's deliberately exposed
 
@@ -193,14 +185,11 @@ Claude. The deliberate exposures are:
   PATH so `uv` resolves without a full path; appended, not
   prepended, so a malicious binary in `~/.local/bin/<sysname>`
   cannot hijack a standard command.
-- **`/root/.local/bin/claude`** (read, single file). The same real
-  Claude binary the shadow exec's (`<src_dir>/.runtime/claude`),
-  bound here so Claude Code's `installMethod=native` self-check
-  finds it at the path it expects. Without this bind, sharing
-  `~/.claude/` across host + sandbox (where the host had
-  `installMethod=native` written into config) triggers a noisy
-  "claude command not found at /root/.local/bin/claude" warning on
-  every launch.
+- **`/root/.local/bin/claude`** (read, single file). The real Claude
+  binary Anthropic's installer drops here. The shadow exec's this
+  same file via `bwrap`, and bind-mounting it back inside the
+  sandbox keeps Claude Code's `installMethod=native` self-check
+  happy.
 - **Network** (`--share-net`). Claude needs to reach
   `api.anthropic.com` and (if you use them) GitHub / GitLab over
   HTTPS. Because the network namespace is shared with the host,
@@ -246,33 +235,33 @@ the prompt if the sandbox is not intact.
 
 ## What's installed
 
-Container-scoped (regenerated by `claude-sandbox install` on every
-run; lost on container rebuild and re-established by the
-`postCreateCommand` bootstrap snippet documented in `README.md`):
+Container-scoped (re-established by re-running `sudo ./install`,
+typically wired into `postCreate.sh` for the devcontainer rebuild):
 
-- `<clone>/.runtime/claude` — the real Claude Code binary, copied
-  here from `~/.local/bin/claude` (Anthropic's installer drop). Lives
-  inside the clone so it survives container rebuilds when the clone
-  is on a host-mounted volume; gitignored.
-- `/usr/local/bin/claude` — a shadow that wraps the real binary in
-  a `bwrap` sandbox. Falls through to the real binary when
+- `~/.local/bin/claude` — the real Claude Code binary, dropped here
+  by Anthropic's installer (`curl -fsSL https://claude.ai/install.sh
+  | bash`). The shadow at `/usr/local/bin/claude` wraps and exec's
+  this binary; no clone-internal copy.
+- `/usr/local/bin/claude` — a shadow (copied verbatim from
+  `.devcontainer/claude-sandbox/claude-shadow`) that wraps the real
+  binary in a `bwrap` sandbox. Falls through to the real binary when
   `IS_SANDBOX=1` so an internal `claude` invocation from a hook
   doesn't recurse.
-- `/usr/local/bin/claude-sandbox` — typer CLI shim that re-execs
-  into `uv run claude-sandbox` from the clone.
-- `/etc/claude-gitconfig` — curated gitconfig.
+- `/etc/claude-gitconfig` — curated gitconfig. Regenerated from
+  `git config --get user.{name,email}` on every shadow launch.
 
 Workspace (place-once, idempotent — never silently overwritten):
 
 - `<workspace>/.claude/settings.json` — created from scratch if
   missing; one-key surgical merge of `hooks.UserPromptSubmit` only
-  if pre-existing. No other settings key is ever touched.
+  if pre-existing. No other settings key is ever touched. JSONC
+  files (containing `//` comments) are refused with a paste-this
+  snippet rather than parsed.
 - `<workspace>/.claude/hooks/sandbox-check.sh` — the
   `UserPromptSubmit` hook that gatekeeps every prompt.
 
-Not placed by `install` (opt-in via separate commands or `git add`):
+Not placed by `install`:
 
-- Skills, commands — opt-in via `install-skill` / `install-command`.
 - `CLAUDE.md`, `README-CLAUDE.md` — neither is placed in the user's
   workspace by `install`. They live in the meta-repo for
   dogfooding.
@@ -283,12 +272,12 @@ Not placed by `install` (opt-in via separate commands or `git add`):
 claude
 ```
 
-(or `claude-sandbox install` if you need to refresh the curated
-gitconfig and shadow after a host gitconfig edit). The shadow on
-`$PATH` always wraps; you cannot accidentally run the unwrapped
-binary from your normal shell.
+The shadow on `$PATH` always wraps; you cannot accidentally run the
+unwrapped binary from your normal shell. The curated gitconfig is
+regenerated from the host's current `user.name` / `user.email` on
+every launch, so a host gitconfig edit takes effect on the next
+`claude` invocation with nothing to re-run.
 
-For forge authentication, use `gh auth login` (GitHub) or
-`glab auth login` (GitLab) from inside the sandbox. Both run their
-interactive flow against the credential helper the curated
-gitconfig registers.
+For forge authentication, run `just gh-auth` / `just glab-auth` from
+the repo root — both walk you through a fine-grained-PAT prompt
+without leaking the token into shell history.

@@ -1,10 +1,8 @@
-# Devcontainer base for claude-sandbox.
+# Devcontainer base for claude-sandbox (bash-only rewrite).
 #
-# The DLS ubuntu-devcontainer image already includes the dev-tooling
-# baseline (uv, git, curl, ca-certs, jq, sudo, build essentials) that
-# the `install` script and pytest suite need. Everything else the
-# project requires at runtime — bubblewrap, nodejs, gh — is apt-installed
-# by `install` itself, so this Dockerfile is intentionally a single FROM.
-# Future apt deps that aren't already in the base or installable by
-# `install` should land here.
+# The DLS ubuntu-devcontainer image already ships the dev-tooling
+# baseline (git, curl, ca-certificates, jq, sudo) the bash installer
+# needs. Everything else (bubblewrap, just, nodejs, gh) is apt-installed
+# by `.devcontainer/claude-sandbox/install.sh` itself, so this
+# Dockerfile is intentionally a single FROM.
 FROM ghcr.io/diamondlightsource/ubuntu-devcontainer:noble AS developer

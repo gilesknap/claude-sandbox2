@@ -4,34 +4,54 @@ on:
   push:
     branches:
       - main
-    tags:
-      - '*'
   pull_request:
 
 jobs:
-
-  lint:
-    uses: ./.github/workflows/_tox.yml
-    with:
-      tox: pre-commit,type-checking
-
   test:
-    strategy:
-      matrix:
-        runs-on: ["ubuntu-latest"] # can add windows-latest, macos-latest
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
-      fail-fast: false
-    uses: ./.github/workflows/_test.yml
-    with:
-      runs-on: ${{ matrix.runs-on }}
-      python-version: ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-  dist:
-    uses: ./.github/workflows/_dist.yml
-  
-  release:
-    needs: [dist, test]
-    if: github.ref_type == 'tag'
-    uses: ./.github/workflows/_release.yml
-    permissions:
-      contents: write
+      - name: Install runtime deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            bubblewrap just jq
+
+      # Ubuntu 24.04 runners ship with
+      # kernel.apparmor_restrict_unprivileged_userns=1, so plain bwrap
+      # fails with "setting up uid map: Permission denied". Relax the
+      # sysctl and install an unconfined AppArmor profile for bwrap so
+      # downstream checks can spawn the sandbox.
+      - name: Allow unprivileged userns on Ubuntu 24.04
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo tee /etc/apparmor.d/bwrap >/dev/null <<'PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+            include if exists <local/bwrap>
+          }
+          PROFILE
+          sudo systemctl reload apparmor || sudo apparmor_parser -r /etc/apparmor.d/bwrap || true
+          bwrap --ro-bind / / --unshare-user --unshare-pid -- /usr/bin/true
+
+      - name: Pre-create /run/secrets so bwrap can mount its tmpfs there
+        run: sudo mkdir -p /run/secrets
+
+      # ubuntu-latest runners have $GITHUB_WORKSPACE living under
+      # $HOME=/home/runner. Anything that path-checks $HOME contains-X
+      # gets tripped by the workspace bind — re-home to a clean dir
+      # before invoking bwrap.
+      - name: Run bwrap_argv unit tests
+        run: |
+          export HOME=/tmp/sandbox-home
+          mkdir -p "$HOME/.claude" "$HOME/.cache"
+          CLAUDE_SANDBOX_SMOKE=1 bash tests/bwrap_argv.sh
+
+      - name: Run install smoke test
+        run: |
+          export HOME=/tmp/sandbox-home
+          mkdir -p "$HOME/.claude" "$HOME/.cache"
+          CLAUDE_SANDBOX_SMOKE=1 sudo -E bash tests/smoke.sh
