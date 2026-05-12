@@ -77,6 +77,24 @@ else
     fail "workspace hook not executable"
 fi
 
+# Workspace statusline placement.
+SL_DEST="$WORKSPACE/.claude/statusline-command.sh"
+if [ -f "$SL_DEST" ]; then
+    pass
+else
+    fail "workspace statusline not placed at $SL_DEST"
+fi
+if [ -x "$SL_DEST" ]; then
+    pass
+else
+    fail "workspace statusline not executable"
+fi
+if [ "$(stat -c '%a' "$SL_DEST" 2>/dev/null)" = "755" ]; then
+    pass
+else
+    fail "statusline mode is $(stat -c '%a' "$SL_DEST" 2>/dev/null), expected 755"
+fi
+
 # Settings.json placement + content.
 SETTINGS="$WORKSPACE/.claude/settings.json"
 if [ -f "$SETTINGS" ]; then
@@ -98,9 +116,22 @@ else
     fail "settings.json missing UserPromptSubmit sandbox-check.sh entry"
 fi
 
+if jq -r '.statusLine.command' "$SETTINGS" 2>/dev/null \
+        | grep -qx '.claude/statusline-command.sh'; then
+    pass
+else
+    fail "settings.json missing .statusLine.command entry"
+fi
+if [ "$(jq -r '.statusLine.type' "$SETTINGS" 2>/dev/null)" = "command" ]; then
+    pass
+else
+    fail "settings.json .statusLine.type is not 'command'"
+fi
+
 # Idempotency: second install must be byte-for-byte stable.
 SHADOW_SUM_A="$(sha256sum "$SHADOW_DEST" | awk '{print $1}')"
 HOOK_SUM_A="$(sha256sum "$HOOK_DEST" | awk '{print $1}')"
+SL_SUM_A="$(sha256sum "$SL_DEST" | awk '{print $1}')"
 SETTINGS_SUM_A="$(sha256sum "$SETTINGS" | awk '{print $1}')"
 
 if ! run_install; then
@@ -109,6 +140,7 @@ fi
 
 SHADOW_SUM_B="$(sha256sum "$SHADOW_DEST" | awk '{print $1}')"
 HOOK_SUM_B="$(sha256sum "$HOOK_DEST" | awk '{print $1}')"
+SL_SUM_B="$(sha256sum "$SL_DEST" | awk '{print $1}')"
 SETTINGS_SUM_B="$(sha256sum "$SETTINGS" | awk '{print $1}')"
 
 if [ "$SHADOW_SUM_A" = "$SHADOW_SUM_B" ]; then
@@ -120,6 +152,11 @@ if [ "$HOOK_SUM_A" = "$HOOK_SUM_B" ]; then
     pass
 else
     fail "workspace hook drifted across install re-run"
+fi
+if [ "$SL_SUM_A" = "$SL_SUM_B" ]; then
+    pass
+else
+    fail "statusline drifted across install re-run"
 fi
 if [ "$SETTINGS_SUM_A" = "$SETTINGS_SUM_B" ]; then
     pass
@@ -174,6 +211,46 @@ if [ "$OUR_HOOK_COUNT" = "1" ]; then
     pass
 else
     fail "duplicate sandbox-check.sh entries after re-merge (count=$OUR_HOOK_COUNT)"
+fi
+
+# Statusline merge must have added our .statusLine alongside the
+# pre-existing permissions/hooks.
+if jq -e '.statusLine.command == ".claude/statusline-command.sh"' \
+        "$MERGE_WORKSPACE/.claude/settings.json" >/dev/null 2>&1; then
+    pass
+else
+    fail "merge did not add our .statusLine block"
+fi
+if jq -e '.permissions.allow[0] == "Bash(ls:*)"' \
+        "$MERGE_WORKSPACE/.claude/settings.json" >/dev/null 2>&1; then
+    pass
+else
+    fail "statusline merge dropped pre-existing permissions"
+fi
+
+# Conflict refusal: pre-existing .statusLine pointing elsewhere must
+# cause install to refuse rather than overwrite.
+CONFLICT_WORKSPACE="$(mktemp -d)"
+trap 'rm -rf "$PREFIX" "$WORKSPACE" "$MERGE_WORKSPACE" "$CONFLICT_WORKSPACE"' EXIT
+mkdir -p "$CONFLICT_WORKSPACE/.claude"
+cat > "$CONFLICT_WORKSPACE/.claude/settings.json" <<'JSON'
+{
+  "statusLine": {"type": "command", "command": "their-statusline.sh"}
+}
+JSON
+
+if INSTALL_WORKSPACE="$CONFLICT_WORKSPACE" \
+        bash "$REPO_ROOT/.devcontainer/claude-sandbox/install.sh" \
+        >/dev/null 2>&1; then
+    fail "install did not refuse conflicting .statusLine.command"
+else
+    pass
+fi
+if jq -e '.statusLine.command == "their-statusline.sh"' \
+        "$CONFLICT_WORKSPACE/.claude/settings.json" >/dev/null 2>&1; then
+    pass
+else
+    fail "conflicting .statusLine.command was overwritten despite refusal"
 fi
 
 # Bwrap sanity check (when bwrap is available AND we are not already

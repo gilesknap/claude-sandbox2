@@ -134,6 +134,20 @@ place_workspace_hook() {
     install -m 0755 "$src" "$dst"
 }
 
+place_workspace_statusline() {
+    local src="$REPO_ROOT/.claude/statusline-command.sh"
+    local dst="$WORKSPACE/.claude/statusline-command.sh"
+    if [ ! -f "$src" ]; then
+        echo "claude-sandbox: cannot find $src" >&2
+        exit 1
+    fi
+    mkdir -p "$(dirname "$dst")"
+    if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
+        return 0
+    fi
+    install -m 0755 "$src" "$dst"
+}
+
 # wire_settings_hook: surgical UserPromptSubmit-hook merge into
 # <workspace>/.claude/settings.json.
 #   - file absent → write minimal {"hooks":{"UserPromptSubmit":[...]}}.
@@ -211,6 +225,59 @@ EOF
     mv "$tmp" "$settings"
 }
 
+# wire_settings_statusline: surgical statusLine merge into
+# <workspace>/.claude/settings.json. Same JSONC-refusal + conflict
+# policy as wire_settings_hook.
+#   - file absent → write minimal {"statusLine":{...}}.
+#   - file parses → set .statusLine to our value if absent; no-op if
+#     already ours; refuse if a different .statusLine.command is set.
+wire_settings_statusline() {
+    local settings="$WORKSPACE/.claude/settings.json"
+    local sl_cmd=".claude/statusline-command.sh"
+    mkdir -p "$(dirname "$settings")"
+
+    local minimal
+    minimal="$(jq -n --arg cmd "$sl_cmd" '{
+        statusLine: {type: "command", command: $cmd}
+    }')"
+
+    if [ ! -f "$settings" ]; then
+        printf '%s\n' "$minimal" > "$settings"
+        chmod 0644 "$settings"
+        return 0
+    fi
+
+    if ! jq -e . "$settings" >/dev/null 2>&1; then
+        cat >&2 <<EOF
+claude-sandbox: refusing — $settings is JSONC (jq parse failed).
+Please paste the following snippet by hand into the file:
+
+$minimal
+
+EOF
+        exit 1
+    fi
+
+    local existing
+    existing="$(jq -r '.statusLine.command // empty' "$settings")"
+    if [ -n "$existing" ] && [ "$existing" != "$sl_cmd" ]; then
+        echo "claude-sandbox: refusing — $settings already has a statusLine.command at '$existing' that differs from our '$sl_cmd'. Reconcile manually." >&2
+        exit 1
+    fi
+    if [ "$existing" = "$sl_cmd" ]; then
+        return 0
+    fi
+
+    local merged tmp
+    merged="$(jq --arg cmd "$sl_cmd" '
+        .statusLine = {type: "command", command: $cmd}
+    ' "$settings")"
+    tmp="$(mktemp "$settings.XXXXXX")"
+    printf '%s\n' "$merged" > "$tmp"
+    chmod 0644 "$tmp"
+    mv "$tmp" "$settings"
+}
+
 main() {
     probe_or_refuse
     # Shadow first: with /usr/local/bin/claude in place before the
@@ -224,7 +291,9 @@ main() {
     install_claude_binary
     ensure_cred_dirs
     place_workspace_hook
+    place_workspace_statusline
     wire_settings_hook
+    wire_settings_statusline
 
     echo "claude-sandbox: install complete."
     echo "  shadow:      $(prefixed /usr/local/bin/claude)"
