@@ -170,17 +170,26 @@ uts_link="$(readlink /proc/self/ns/uts 2>/dev/null || true)"
 case "$uts_link" in uts:\[*\]) exit 0 ;; *) exit 1 ;; esac
 ```
 
-## Check 10 — --new-session (TIOCSTI blocked)
+## Check 10 — private /dev (TIOCSTI blocked)
 
-`--new-session` calls `setsid()` so the controlling terminal is
-detached. An ioctl(TIOCSTI) injection attempt cannot reach the
-parent shell.
+We dropped `--new-session` so SIGWINCH and job control reach the
+sandbox. The TIOCSTI defence is now delivered by two coupled
+mechanisms: the shadow wraps bwrap in `script(1)` (the in-sandbox
+process inherits script's allocated pty as its controlling terminal,
+not the host's), and `bwrap_argv.sh` uses `--dev /dev` (a fresh
+devtmpfs with a fresh devpts mount — the host's `/dev/pts/*` is
+not visible). An ioctl(TIOCSTI) inside the sandbox can therefore
+only inject into script's pty, whose contents script reads and
+writes as *output bytes* to the host terminal — never as input to
+the parent shell.
 
 ```bash
-# If --new-session is in effect, we have no controlling tty so an
-# attempted TIOCSTI on stdin fails. tty -s exits non-zero when stdin
-# is not a tty; bwrap's --new-session makes that the case.
-! tty -s 2>/dev/null
+# /dev must be a fresh mount inside the sandbox (not a bind of the
+# host's /dev). Under --dev /dev bwrap mounts a private devtmpfs;
+# under --dev-bind /dev /dev it would be a bind mount. mountinfo
+# field 9 (fs type) distinguishes them.
+awk '$5 == "/dev" { print $9; exit }' /proc/self/mountinfo \
+    | grep -qE '^(tmpfs|devtmpfs)$'
 ```
 
 ## Check 11 — /tmp is tmpfs and empty

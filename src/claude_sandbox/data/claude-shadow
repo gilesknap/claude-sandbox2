@@ -135,4 +135,24 @@ touch "${HOME:-/root}/.claude.json"
 source "$SRC_DIR/src/claude_sandbox/data/bwrap_argv.sh"
 
 mapfile -t ARGV < <(bwrap_argv_build "$PWD" "$REAL_CLAUDE" "$@")
-exec "${ARGV[@]}"
+
+# Wrap bwrap in script(1) so the sandbox runs inside a freshly-allocated
+# pseudo-terminal. Three properties this gives us:
+#
+#   1. SIGWINCH propagates: script forwards window-size changes from
+#      the host terminal to the inner pty (via TIOCSWINSZ), and the pty
+#      kernel driver delivers SIGWINCH to the in-sandbox foreground pg.
+#      The previous --new-session approach severed this chain.
+#   2. Job control works: Ctrl-Z, fg/bg, SIGINT routing all behave.
+#   3. TIOCSTI is defanged: an ioctl(TIOCSTI) inside the sandbox
+#      lands in script's pty, whose contents script reads and *writes*
+#      (as bytes, not keystrokes) to the host terminal. The host
+#      shell's input buffer is unreachable. Combined with --dev /dev
+#      in bwrap_argv.sh (no host /dev/pts visible), the in-sandbox
+#      process has no path to the host's controlling tty.
+#
+# script's `-q` silences the start/end banner; `-E never` disables
+# echo manipulation; the typescript log is sunk to /dev/null because
+# we don't want to record the session. The argv is %q-escaped for
+# script's sh -c re-parse.
+exec script -q -E never -c "$(printf '%q ' "${ARGV[@]}")" /dev/null

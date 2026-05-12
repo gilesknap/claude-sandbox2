@@ -31,7 +31,15 @@ bwrap_argv_build() {
     local -a argv=(
         bwrap
         --ro-bind / /
-        --dev-bind /dev /dev
+        # Fresh /dev (not --dev-bind) hides the host's /dev/pts so an
+        # in-sandbox ioctl(TIOCSTI) can only inject into the script(1)-
+        # allocated pty the shadow wraps us in — bytes land in *that*
+        # pty's input queue, which script's parent reads and writes as
+        # output to the host terminal (displayed, not enqueued). The
+        # host shell's input buffer is unreachable. This replaces the
+        # --new-session TIOCSTI defence below; see the resize-fix issue
+        # in README-CLAUDE.md.
+        --dev /dev
     )
 
     # Fresh procfs (--proc /proc) gives the sandbox a per-pid-namespace
@@ -211,7 +219,13 @@ bwrap_argv_build() {
         --unshare-ipc
         --unshare-uts
         --unshare-cgroup-try
-        --new-session
+        # --new-session was dropped intentionally: setsid() detached
+        # the sandbox from its controlling terminal, which killed
+        # SIGWINCH delivery (resize stops propagating) and broke job
+        # control. The TIOCSTI defence it provided is now delivered
+        # by the shadow wrapping bwrap in script(1) plus --dev /dev
+        # above (fresh devpts, host /dev/pts not visible). See the
+        # resize-fix issue in README-CLAUDE.md.
         --die-with-parent
     )
 
