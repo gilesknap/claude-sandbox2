@@ -225,46 +225,16 @@ EOF
     mv "$tmp" "$settings"
 }
 
-# wire_settings_statusline: surgical statusLine merge into
-# <workspace>/.claude/settings.json. Same JSONC-refusal + conflict
-# policy as wire_settings_hook.
-#   - file absent → write minimal {"statusLine":{...}}.
-#   - file parses → set .statusLine to our value if absent; no-op if
-#     already ours; refuse if a different .statusLine.command is set.
+# wire_settings_statusline: stamp our .statusLine into settings.json
+# iff the field is absent. Any pre-existing .statusLine — ours or the
+# user's — is left alone, so a user who customised theirs keeps it
+# across rebuilds. wire_settings_hook runs first and guarantees the
+# file exists and parses as JSON, so no JSONC branch is needed here.
 wire_settings_statusline() {
     local settings="$WORKSPACE/.claude/settings.json"
     local sl_cmd=".claude/statusline-command.sh"
-    mkdir -p "$(dirname "$settings")"
 
-    local minimal
-    minimal="$(jq -n --arg cmd "$sl_cmd" '{
-        statusLine: {type: "command", command: $cmd}
-    }')"
-
-    if [ ! -f "$settings" ]; then
-        printf '%s\n' "$minimal" > "$settings"
-        chmod 0644 "$settings"
-        return 0
-    fi
-
-    if ! jq -e . "$settings" >/dev/null 2>&1; then
-        cat >&2 <<EOF
-claude-sandbox: refusing — $settings is JSONC (jq parse failed).
-Please paste the following snippet by hand into the file:
-
-$minimal
-
-EOF
-        exit 1
-    fi
-
-    local existing
-    existing="$(jq -r '.statusLine.command // empty' "$settings")"
-    if [ -n "$existing" ] && [ "$existing" != "$sl_cmd" ]; then
-        echo "claude-sandbox: refusing — $settings already has a statusLine.command at '$existing' that differs from our '$sl_cmd'. Reconcile manually." >&2
-        exit 1
-    fi
-    if [ "$existing" = "$sl_cmd" ]; then
+    if jq -e '.statusLine' "$settings" >/dev/null 2>&1; then
         return 0
     fi
 

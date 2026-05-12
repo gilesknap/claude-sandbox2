@@ -228,29 +228,35 @@ else
     fail "statusline merge dropped pre-existing permissions"
 fi
 
-# Conflict refusal: pre-existing .statusLine pointing elsewhere must
-# cause install to refuse rather than overwrite.
-CONFLICT_WORKSPACE="$(mktemp -d)"
-trap 'rm -rf "$PREFIX" "$WORKSPACE" "$MERGE_WORKSPACE" "$CONFLICT_WORKSPACE"' EXIT
-mkdir -p "$CONFLICT_WORKSPACE/.claude"
-cat > "$CONFLICT_WORKSPACE/.claude/settings.json" <<'JSON'
+# Pre-existing .statusLine policy: respect it. Install still completes
+# (hook is wired) but the user's statusLine is left untouched.
+RESPECT_WORKSPACE="$(mktemp -d)"
+trap 'rm -rf "$PREFIX" "$WORKSPACE" "$MERGE_WORKSPACE" "$RESPECT_WORKSPACE"' EXIT
+mkdir -p "$RESPECT_WORKSPACE/.claude"
+cat > "$RESPECT_WORKSPACE/.claude/settings.json" <<'JSON'
 {
   "statusLine": {"type": "command", "command": "their-statusline.sh"}
 }
 JSON
 
-if INSTALL_WORKSPACE="$CONFLICT_WORKSPACE" \
+if INSTALL_WORKSPACE="$RESPECT_WORKSPACE" \
         bash "$REPO_ROOT/.devcontainer/claude-sandbox/install.sh" \
         >/dev/null 2>&1; then
-    fail "install did not refuse conflicting .statusLine.command"
-else
     pass
+else
+    fail "install refused a workspace with a pre-existing .statusLine"
 fi
 if jq -e '.statusLine.command == "their-statusline.sh"' \
-        "$CONFLICT_WORKSPACE/.claude/settings.json" >/dev/null 2>&1; then
+        "$RESPECT_WORKSPACE/.claude/settings.json" >/dev/null 2>&1; then
     pass
 else
-    fail "conflicting .statusLine.command was overwritten despite refusal"
+    fail "pre-existing .statusLine was overwritten"
+fi
+if jq -e 'any(.hooks.UserPromptSubmit[].hooks[]; .command == ".claude/hooks/sandbox-check.sh")' \
+        "$RESPECT_WORKSPACE/.claude/settings.json" >/dev/null 2>&1; then
+    pass
+else
+    fail "hook wiring did not run on a workspace with pre-existing .statusLine"
 fi
 
 # Bwrap sanity check (when bwrap is available AND we are not already
