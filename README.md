@@ -2,9 +2,10 @@
 
 # claude-sandbox
 
-bwrap-isolated Claude Code for Debian/Ubuntu devcontainers. A hostile
-prompt, file, or tool result cannot reach your host credentials, IDE
-bridges, or shell environment.
+bwrap-isolated Claude Code for Debian/Ubuntu devcontainers (rootless
+Podman is the supported runtime; rootless Docker works too). A
+hostile prompt, file, or tool result cannot reach your host
+credentials, IDE bridges, or shell environment.
 
 ## Quickstart
 
