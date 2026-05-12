@@ -9,7 +9,7 @@ test:
 # Pull the latest tip and re-run the installer.
 upgrade:
     git pull --ff-only
-    sudo bash install
+    bash install
 
 # Seed the sandbox's curated `.claude/` (commands, skills, hooks,
 # statusline, sandbox-check hook) into a target host workspace. See

@@ -77,7 +77,7 @@ them — five push-and-iterate cycles to land this; don't re-discover.
 
 ## Design principle — keep dogfood ≈ guest
 
-The repo's own devcontainer (dogfood) and a `git clone + sudo ./install`
+The repo's own devcontainer (dogfood) and a `git clone + ./install`
 inside any other devcontainer (guest) should go through the same
 setup path. Prefer `install.sh` over `devcontainer.json` /
 `postCreate.sh` / `initializeCommand.sh` when a fix can live in
@@ -104,7 +104,7 @@ a self-sufficient claude-sandbox host:
    `settings.json`.
 2. **Install machinery** — `.devcontainer/claude-sandbox/{install.sh,
    claude-shadow, promote.sh}` only. The root `install` shim is *not*
-   copied; it's the source repo's manual-UX entry (`sudo ./install`),
+   copied; it's the source repo's manual-UX entry (`./install`),
    not a target workflow.
 3. **`.devcontainer/postCreate.sh`** running
    `bash .devcontainer/claude-sandbox/install.sh` (created if absent,

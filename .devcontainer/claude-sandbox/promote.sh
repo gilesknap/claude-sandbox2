@@ -98,7 +98,7 @@ EOF
         return 0
     fi
 
-    if grep -Eq '^[[:space:]]*(sudo[[:space:]]+)?bash[[:space:]]+\.devcontainer/claude-sandbox/install\.sh' "$pc"; then
+    if grep -Eq '^[[:space:]]*bash[[:space:]]+\.devcontainer/claude-sandbox/install\.sh' "$pc"; then
         chmod 0755 "$pc"
         return 0
     fi
@@ -143,7 +143,7 @@ wire_settings_statusline
 # teammate doesn't need a second clone of claude-sandbox. The root
 # `install` shim is NOT copied; promoted repos invoke install.sh
 # directly from postCreate.sh. The shim is the source repo's manual-UX
-# entry (`sudo ./install`) and isn't a primary workflow for targets.
+# entry (`./install`) and isn't a primary workflow for targets.
 install_file "$SCRIPT_DIR/install.sh"    "$TARGET/.devcontainer/claude-sandbox/install.sh"
 install_file "$SCRIPT_DIR/claude-shadow" "$TARGET/.devcontainer/claude-sandbox/claude-shadow"
 install_file "$SCRIPT_DIR/promote.sh"    "$TARGET/.devcontainer/claude-sandbox/promote.sh"
@@ -160,4 +160,4 @@ echo "claude-sandbox: promote complete."
 echo "  source:   $REPO_ROOT"
 echo "  target:   $TARGET"
 echo "  next:     open $TARGET in a devcontainer (postCreate will install),"
-echo "            or 'sudo bash .devcontainer/claude-sandbox/install.sh' inside it."
+echo "            or 'bash .devcontainer/claude-sandbox/install.sh' inside it."

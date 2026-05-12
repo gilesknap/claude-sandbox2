@@ -14,7 +14,7 @@ rootless-podman pattern):
 ```
 git clone https://github.com/gilesknap/claude-sandbox2.git
 cd claude-sandbox2
-sudo ./install
+./install
 ```
 
 Then run `claude` as usual — the shadow on `$PATH` wraps every
@@ -24,8 +24,8 @@ pass.
 
 The installer is idempotent: re-run after a devcontainer rebuild and
 the shadow is re-established without re-downloading Claude. Wire
-`sudo bash <clone>/install` into your devcontainer's `postCreate.sh`
-to automate that step.
+`bash <clone>/install` into your devcontainer's `postCreate.sh` to
+automate that step.
 
 > Currently published as `gilesknap/claude-sandbox2` during the
 > proving period. Once stable it reverts to the canonical
@@ -41,7 +41,7 @@ clone there instead:
 cd /user-terminal-config
 git clone https://github.com/gilesknap/claude-sandbox2.git
 cd claude-sandbox2
-sudo ./install
+./install
 ```
 
 The clone lives on the host under `~/.config/terminal-config`, so it
@@ -94,7 +94,7 @@ lives at `.claude/commands/verify-sandbox.md`.
 just upgrade
 ```
 
-Equivalent to `git pull --ff-only && sudo bash install`.
+Equivalent to `git pull --ff-only && bash install`.
 
 ## Promoting into a host workspace
 
