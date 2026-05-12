@@ -96,26 +96,41 @@ just upgrade
 
 Equivalent to `git pull --ff-only && sudo bash install`.
 
-## Promoting curated `.claude/` into a host workspace
+## Promoting into a host workspace
 
-If you run sandboxed Claude from inside an unrelated devcontainer (e.g.
-a `fastcs` workspace), that workspace usually has no `.claude/` of its
-own — none of the curated commands, skills, hooks, or statusline are
-discoverable.
+`just promote` makes a target workspace a self-sufficient claude-sandbox
+host — a teammate who clones the target only needs the devcontainer to
+come up; the installer runs from `postCreate.sh` and the curated
+`.claude/` is in tree.
 
 ```
-just promote                       # seeds $PWD/.claude/
-just promote /workspaces/fastcs    # seeds the named target
+just promote                       # promote into $PWD
+just promote /workspaces/fastcs    # promote into the named target
 ```
 
-Copies `.claude/{commands,skills,hooks,statusline-command.sh}` from
-this clone into `<target>/.claude/` and surgically merges our
-`sandbox-check.sh` hook + `statusLine` into `<target>/.claude/settings.json`
-(pre-existing keys are preserved). Idempotent: re-runs are byte-stable.
-After promoting, `git add .claude/` in the target if you want the team
-to inherit the toolkit.
+Three things land in the target:
 
-Does NOT touch `~/.claude` — that channel stays reserved for
+1. **Curated `.claude/`** — commands, skills, hooks, statusline; plus a
+   surgical merge of our `sandbox-check.sh` hook + `statusLine` into
+   `<target>/.claude/settings.json` (pre-existing keys preserved).
+2. **Install machinery** — `install` shim and
+   `.devcontainer/claude-sandbox/{install.sh, claude-shadow, promote.sh}`,
+   so `sudo ./install` works directly from the target. The cost is
+   ~5 small bash files per promoted repo; re-running `just promote`
+   from this clone re-syncs byte-equal.
+3. **`.devcontainer/postCreate.sh`** containing `bash install` — created
+   if absent, idempotently appended otherwise.
+
+After it finishes, promote prints a one-line `"postCreateCommand"`
+snippet to paste into the target's `.devcontainer/devcontainer.json`.
+We deliberately don't auto-edit that file: it's JSONC in the wild,
+structured editing while preserving comments is more code than this
+repo wants, and you're the one who knows whether you've already wired
+it or need to combine with an existing `postCreateCommand`. One-time
+edit; subsequent `just promote` runs are byte-stable.
+
+`just promote` is idempotent, refuses self-targeting (`TARGET == clone`),
+and does NOT touch `~/.claude` — that channel stays reserved for
 cross-container shared state (OAuth, memories).
 
 ## Authenticating with forges
