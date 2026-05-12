@@ -211,10 +211,15 @@ EOF
 
 main() {
     probe_or_refuse
+    # Shadow first: with /usr/local/bin/claude in place before
+    # ~/.local/bin/claude exists, any `claude` lookup during the rest
+    # of install resolves (and bash-hashes) to the shadow path, even
+    # if the shadow itself transiently fails because bwrap or the real
+    # binary haven't landed yet.
+    install_shadow
     apt_install
     probe_userns_or_refuse
     install_claude_binary
-    install_shadow
     ensure_cred_dirs
     link_terminal_config
     place_workspace_hook
