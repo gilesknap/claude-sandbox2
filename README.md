@@ -13,8 +13,8 @@ Inside any Debian/Ubuntu devcontainer (running as `root`, typical
 rootless-podman pattern):
 
 ```
-git clone https://github.com/gilesknap/claude-sandbox2.git
-cd claude-sandbox2
+git clone https://github.com/gilesknap/claude-sandbox.git
+cd claude-sandbox
 ./install
 ```
 
@@ -28,10 +28,6 @@ the shadow is re-established without re-downloading Claude. Wire
 `bash <clone>/install` into your devcontainer's `postCreate.sh` to
 automate that step.
 
-> Currently published as `gilesknap/claude-sandbox2` during the
-> proving period. Once stable it reverts to the canonical
-> `gilesknap/claude-sandbox` URL.
-
 ### Devcontainers using terminal-config (e.g. python-copier-template)
 
 If your devcontainer bind-mounts `~/.config/terminal-config` at
@@ -40,8 +36,8 @@ clone there instead:
 
 ```
 cd /user-terminal-config
-git clone https://github.com/gilesknap/claude-sandbox2.git
-cd claude-sandbox2
+git clone https://github.com/gilesknap/claude-sandbox.git
+cd claude-sandbox
 ./install
 ```
 
@@ -151,8 +147,8 @@ never enter shell history.
 ## Development
 
 ```
-git clone https://github.com/gilesknap/claude-sandbox2.git
-cd claude-sandbox2
+git clone https://github.com/gilesknap/claude-sandbox.git
+cd claude-sandbox
 just test
 ```
 
