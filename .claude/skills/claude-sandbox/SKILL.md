@@ -139,6 +139,35 @@ overwrite-on-diff.
 `source install.sh` to reuse `install_file` + `wire_settings_*`
 without re-running `main`. Don't remove the guard.
 
+## Considered alternative — postCreate references shared clone (declined)
+
+A natural-sounding refinement: drop layer 2 of promote (the
+install-machinery copy) and have the target's `postCreate.sh` invoke
+`install.sh` directly from the canonical clone, e.g.
+`bash /user-terminal-config/claude-sandbox/.devcontainer/claude-sandbox/install.sh`.
+Drift auto-resolves on `git pull` of the canonical clone; audit
+surface stays single-tracked. (Variant: do this from bashrc — even
+weaker, since `install.sh` does root-level work, see invariant 1.)
+
+Declined because it sacrifices two properties promote-by-copy
+deliberately optimises for:
+
+- **Self-sufficiency.** `git clone <target> && ./install` works in
+  any devcontainer. Reference-by-path requires the shared clone on
+  every host — breaks CI runners, clean VMs, collaborators with
+  different layouts.
+- **Frozen audit surface.** Promote-by-copy means "what ran is what's
+  at this SHA in this repo." Reference-by-path means what runs
+  depends on whichever HEAD the shared clone happens to be at. Drift
+  you can see beats drift you can't.
+
+If a future request says "just point postCreate at the shared clone",
+surface this tradeoff before agreeing. Acceptable compromise if
+explicitly asked: an *opt-in* recipe (e.g. `just
+wire-postcreate-shared`) alongside today's frozen-copy default. Do
+**not** "retain both mechanisms and keep them synced" — that's the
+synchronisation debt Reversal 2 walked away from.
+
 ## Historical reversals — raise before re-treading
 
 Two paths walked back. If a change suggests either, surface the
