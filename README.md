@@ -96,6 +96,28 @@ just upgrade
 
 Equivalent to `git pull --ff-only && sudo bash install`.
 
+## Promoting curated `.claude/` into a host workspace
+
+If you run sandboxed Claude from inside an unrelated devcontainer (e.g.
+a `fastcs` workspace), that workspace usually has no `.claude/` of its
+own — none of the curated commands, skills, hooks, or statusline are
+discoverable.
+
+```
+just promote                       # seeds $PWD/.claude/
+just promote /workspaces/fastcs    # seeds the named target
+```
+
+Copies `.claude/{commands,skills,hooks,statusline-command.sh}` from
+this clone into `<target>/.claude/` and surgically merges our
+`sandbox-check.sh` hook + `statusLine` into `<target>/.claude/settings.json`
+(pre-existing keys are preserved). Idempotent: re-runs are byte-stable.
+After promoting, `git add .claude/` in the target if you want the team
+to inherit the toolkit.
+
+Does NOT touch `~/.claude` — that channel stays reserved for
+cross-container shared state (OAuth, memories).
+
 ## Authenticating with forges
 
 ```

@@ -4,11 +4,18 @@
 test:
     bash tests/bwrap_argv.sh
     CLAUDE_SANDBOX_SMOKE=1 bash tests/smoke.sh
+    bash tests/promote.sh
 
 # Pull the latest tip and re-run the installer.
 upgrade:
     git pull --ff-only
     sudo bash install
+
+# Seed the sandbox's curated `.claude/` (commands, skills, hooks,
+# statusline, sandbox-check hook) into a target host workspace. See
+# .devcontainer/claude-sandbox/promote.sh for the rationale.
+promote target=invocation_directory():
+    bash .devcontainer/claude-sandbox/promote.sh {{ target }}
 
 # Authenticate gh CLI with a GitHub PAT (token not stored in shell history).
 gh-auth:
