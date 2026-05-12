@@ -101,23 +101,6 @@ ensure_cred_dirs() {
     touch "$HOME/.claude.json"
 }
 
-link_terminal_config() {
-    local shared="/user-terminal-config/.claude"
-    local link="$HOME/.claude"
-    if [ ! -d "$shared" ]; then
-        return 0
-    fi
-    if [ -L "$link" ] && [ "$(readlink "$link")" = "$shared" ]; then
-        return 0
-    fi
-    if [ -e "$link" ] && [ ! -L "$link" ]; then
-        # Real directory present — refuse rather than clobber user state.
-        echo "claude-sandbox: $link is a real directory; refusing to clobber. Move it aside and re-run." >&2
-        return 0
-    fi
-    ln -snf "$shared" "$link"
-}
-
 place_workspace_hook() {
     local src="$REPO_ROOT/.claude/hooks/sandbox-check.sh"
     local dst="$WORKSPACE/.claude/hooks/sandbox-check.sh"
@@ -221,7 +204,6 @@ main() {
     probe_userns_or_refuse
     install_claude_binary
     ensure_cred_dirs
-    link_terminal_config
     place_workspace_hook
     wire_settings_hook
 

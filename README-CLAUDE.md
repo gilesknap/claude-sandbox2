@@ -146,15 +146,11 @@ Claude. The deliberate exposures are:
   The host's `/root/.gitconfig` is invisible via strict-under-/root,
   so there is no comparable concern at $HOME.
 - **`/root/.claude/`** (read/write). Claude's own state, settings,
-  skills, and hooks. When the devcontainer mounts
-  `~/.config/terminal-config` at `/user-terminal-config`,
-  `claude-sandbox install` makes `~/.claude` a symlink to
-  `/user-terminal-config/.claude` so the tree persists across
-  container rebuilds and is shared across every devcontainer that
-  mounts the same terminal-config dir. The sandbox bind follows the
-  symlink at mount time, so the shared tree is bound writably at
-  `/root/.claude` inside the sandbox; the symlink itself is hidden by
-  the strict-under-/root tmpfs.
+  skills, and hooks. The devcontainer bind-mounts
+  `~/.config/terminal-config/.claude` directly at `/root/.claude`, so
+  the tree persists across rebuilds and is shared across every
+  devcontainer that mounts the same terminal-config dir. The sandbox
+  re-binds `/root/.claude` writably inside the bwrap namespace.
 - **`/root/.claude.json`** (read/write). Claude Code's account-level
   state file — OAuth token, recent-projects list, settings. A
   top-level file rather than a directory, so it needs its own bind

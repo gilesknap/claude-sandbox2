@@ -25,11 +25,22 @@
         "--security-opt=label=disable"
     ],
     "mounts": [
-        // Mount in the user terminal config folder so `~/.claude` can
-        // be symlinked into it and persist across rebuilds.
+        // Shell config shared across every devcontainer on the host:
+        // the base image's /root/.bashrc sources
+        // ${USER_TERMINAL_CONFIG}/bashrc, which sets HISTFILE here so
+        // bash history persists across containers and rebuilds.
         {
             "source": "${localEnv:HOME}/.config/terminal-config",
             "target": "/user-terminal-config",
+            "type": "bind"
+        },
+        // Claude config (settings, memory, skills) shared across every
+        // devcontainer. Declarative so /root/.claude points at the
+        // shared dir from container start — no install-time symlink
+        // race with Claude itself creating /root/.claude.
+        {
+            "source": "${localEnv:HOME}/.config/terminal-config/.claude",
+            "target": "/root/.claude",
             "type": "bind"
         },
         // Keep a persistent cross-container cache.
