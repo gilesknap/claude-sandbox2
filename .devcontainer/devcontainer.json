@@ -43,6 +43,14 @@
             "target": "/root/.claude",
             "type": "bind"
         },
+        // Sibling state file holding oauthAccount + onboarding flags;
+        // without this, every rebuild re-prompts login. Pre-touched by
+        // initializeCommand.sh so the bind source exists.
+        {
+            "source": "${localEnv:HOME}/.config/terminal-config/.claude.json",
+            "target": "/root/.claude.json",
+            "type": "bind"
+        },
         // Keep a persistent cross-container cache.
         {
             "source": "devcontainer-shared-cache",
