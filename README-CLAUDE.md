@@ -31,6 +31,7 @@ non-zero on any FAIL, so it's usable as a CI assertion).
 | `.netrc` defence in depth | `--bind-try /dev/null /root/.netrc` | check 14 |
 | `.Xauthority` defence in depth | `--bind-try /dev/null /root/.Xauthority` | check 15 |
 | Curated gitconfig in effect | `GIT_CONFIG_GLOBAL=/etc/claude-gitconfig`, `GIT_CONFIG_SYSTEM=/dev/null` | check 16 |
+| Chrome browser-extension RPC channel disabled | shadow injects `--no-chrome` and strips user `--chrome` so Claude Code never writes its `NativeMessagingHosts` manifest | check 03 (regression manifests as browser dirs under `~/.config`) |
 
 Network egress (`--share-net`, NOT unshared) is deliberately open so
 Claude can reach `api.anthropic.com`. No PASS/FAIL check — any
