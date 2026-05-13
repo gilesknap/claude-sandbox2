@@ -75,7 +75,7 @@ Claude. The deliberate exposures:
 
 | Path | Mode | Why |
 |---|---|---|
-| Workspace | rw | The whole point of Claude — see [workspace visibility caveat](#workspace-visibility-caveat) below |
+| Workspace | rw | The whole point of Claude — see [workspace visibility caveat](#workspace-visibility-caveat) below. Resolution: `CLAUDE_SANDBOX_WORKSPACE_ROOT` if set; else `/workspaces` when `$PWD` is under it (so sibling devcontainer projects are writable); else `$PWD` |
 | `/etc/claude-gitconfig` | r | Curated gitconfig: gh/glab credential helpers for `https://github.com` and `https://gitlab.diamond.ac.uk`, ssh→https `insteadOf` rewrites, regenerated at every shadow launch from your host's current `user.name`/`user.email` |
 | `/etc/gitconfig` | r | Host's system gitconfig is reachable read-only but neutralised for `git` because `GIT_CONFIG_SYSTEM=/dev/null` — see [gitconfig defence-in-depth](#gitconfig-defence-in-depth) |
 | `/root/.claude/` | rw | Claude's state, settings, skills, hooks. `install.sh` symlinks this to `/user-terminal-config/.claude` so the tree persists across rebuilds and is shared with every other devcontainer that mounts the same `terminal-config` dir |

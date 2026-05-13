@@ -202,5 +202,51 @@ assert_not_contains scenario7-strip "$ARGV7" "--chrome"
 # User's legit args still pass through.
 assert_contains scenario7-strip "$ARGV7" "--version"
 
+# --- Scenario 8: resolve_workspace_root ---
+# Pure function: priority is env override > /workspaces auto-detect > $PWD.
+
+assert_eq() {
+    local name="$1" expected="$2" actual="$3"
+    if [ "$expected" = "$actual" ]; then
+        PASSED=$((PASSED+1))
+    else
+        FAILED=$((FAILED+1))
+        echo "FAIL: $name — expected '$expected', got '$actual'" >&2
+    fi
+}
+
+unset CLAUDE_SANDBOX_WORKSPACE_ROOT
+
+# Auto-detect: $PWD directly under /workspaces/ → /workspaces.
+assert_eq scenario8-auto-direct "/workspaces" \
+    "$(resolve_workspace_root /workspaces/claude-sandbox2)"
+
+# Auto-detect: $PWD nested deeper under /workspaces/ → still /workspaces.
+assert_eq scenario8-auto-nested "/workspaces" \
+    "$(resolve_workspace_root /workspaces/claude-sandbox2/sub/deeper)"
+
+# Fallback: $PWD outside /workspaces/ → $PWD itself (legacy behaviour).
+assert_eq scenario8-fallback-tmp "/tmp/myproject" \
+    "$(resolve_workspace_root /tmp/myproject)"
+
+# Edge: $PWD is /workspaces itself (no trailing slash, not /workspaces/X)
+# → falls through to $PWD. Matches the literal /workspaces/ prefix check.
+assert_eq scenario8-edge-bare "/workspaces" \
+    "$(resolve_workspace_root /workspaces)"
+
+# Override: CLAUDE_SANDBOX_WORKSPACE_ROOT wins regardless of $PWD.
+assert_eq scenario8-override-from-workspaces "/srv/custom" \
+    "$(CLAUDE_SANDBOX_WORKSPACE_ROOT=/srv/custom resolve_workspace_root /workspaces/foo)"
+
+assert_eq scenario8-override-from-tmp "/srv/custom" \
+    "$(CLAUDE_SANDBOX_WORKSPACE_ROOT=/srv/custom resolve_workspace_root /tmp/bar)"
+
+# Empty override is treated as unset — falls back to auto-detect / $PWD.
+assert_eq scenario8-empty-override-auto "/workspaces" \
+    "$(CLAUDE_SANDBOX_WORKSPACE_ROOT= resolve_workspace_root /workspaces/foo)"
+
+assert_eq scenario8-empty-override-fallback "/tmp/bar" \
+    "$(CLAUDE_SANDBOX_WORKSPACE_ROOT= resolve_workspace_root /tmp/bar)"
+
 echo "bwrap_argv.sh: $PASSED passed / $FAILED failed"
 [ "$FAILED" -eq 0 ]
