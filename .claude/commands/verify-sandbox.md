@@ -54,13 +54,18 @@ grep -q '^NoNewPrivs:[[:space:]]*1$' /proc/self/status
 
 ## Check 03 — strict-under-/root
 
-`$HOME` (typically `/root`) is a tmpfs with only `.claude`,
-`.claude.json` (Claude Code's account state), and (optionally)
-`.cache` bound back in, plus a `.config` intermediate tmpfs that holds
-the `gh` / `glab-cli` credential binds. Claude Code itself writes
-`.local/{bin,share,state}/claude` and a `.local/share/applications`
-`.desktop` URL handler into the tmpfs on first launch, so `.local` is
-also expected (contents live in the tmpfs, not bound from the host).
+`$HOME` (typically `/root`) is a tmpfs with `.claude`, `.claude.json`
+(Claude Code's account state), `.cache`, and `.local/share` bound back
+in from the host, plus a `.config` intermediate tmpfs that holds the
+`gh` / `glab-cli` credential binds. The `.local/share` bind is the
+XDG-data bulk-mount (helm plugins, krew, uv-managed Python, etc.) —
+see README-CLAUDE.md's "XDG split rationale". Under `.local/share`,
+two sub-dirs stay tmpfs-masked: `applications/` (Claude Code's
+`.desktop` URL handler, which we don't want registered on the host
+desktop environment) and `claude/` (Claude Code's versioned binary
+cache, ephemeral by design). Claude Code also writes `.local/bin/
+claude` (the real-binary bind) and tmpfs-only entries under
+`.local/state/claude`, so `.local` is expected as a top-level entry.
 The defence-in-depth file masks (checks 14–15) also bind `/dev/null`
 over `.netrc`, `.Xauthority`, and `.ICEauthority` — so those names
 are expected to appear too, as size-zero entries (which checks 14–15

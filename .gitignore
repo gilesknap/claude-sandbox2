@@ -6,3 +6,6 @@
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 .claude/worktrees/
+
+# vscode workspaces
+*.code-workspace

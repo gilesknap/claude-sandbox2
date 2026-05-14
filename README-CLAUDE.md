@@ -18,7 +18,7 @@ non-zero on any FAIL, so it's usable as a CI assertion).
 |---|---|---|
 | Sandbox is actually entered | `IS_SANDBOX=1` sentinel | check 01 |
 | Setuid escalation blocked | `NO_NEW_PRIVS` (set by bwrap before exec) | check 02 |
-| Strict-under-`/root` by inversion | `--tmpfs /root` then re-bind `.claude` / `.claude.json` / `.cache` / `.config/{gh,glab-cli}` | check 03 |
+| Strict-under-`/root` by inversion | `--tmpfs /root` then re-bind `.claude` / `.claude.json` / `.cache` / `.config/{gh,glab-cli}` / `.local/share` (with `applications/` + `claude/` tmpfs-masked) | check 03 |
 | Host env vars scrubbed | `--clearenv` + explicit allow-list | checks 04, 05 |
 | Zero capabilities | `--cap-drop ALL` | check 06 |
 | PID namespace (kill/ptrace scoping) | `--unshare-pid` | check 07 |
@@ -75,7 +75,7 @@ Claude. The deliberate exposures:
 
 | Path | Mode | Why |
 |---|---|---|
-| Workspace | rw | The whole point of Claude — see [workspace visibility caveat](#workspace-visibility-caveat) below |
+| Workspace | rw | The whole point of Claude — see [workspace visibility caveat](#workspace-visibility-caveat) below. Resolution: `CLAUDE_SANDBOX_WORKSPACE_ROOT` if set; else `/workspaces` when `$PWD` is under it (so sibling devcontainer projects are writable); else `$PWD` |
 | `/etc/claude-gitconfig` | r | Curated gitconfig: gh/glab credential helpers for `https://github.com` and `https://gitlab.diamond.ac.uk`, ssh→https `insteadOf` rewrites, regenerated at every shadow launch from your host's current `user.name`/`user.email` |
 | `/etc/gitconfig` | r | Host's system gitconfig is reachable read-only but neutralised for `git` because `GIT_CONFIG_SYSTEM=/dev/null` — see [gitconfig defence-in-depth](#gitconfig-defence-in-depth) |
 | `/root/.claude/` | rw | Claude's state, settings, skills, hooks. `install.sh` symlinks this to `/user-terminal-config/.claude` so the tree persists across rebuilds and is shared with every other devcontainer that mounts the same `terminal-config` dir |
@@ -83,7 +83,7 @@ Claude. The deliberate exposures:
 | `/root/.cache/` | rw | Tool caches Claude needs across runs (if present) |
 | `/root/.config/gh/` | rw | `gh` CLI's token store. Required so `gh auth status` works and the curated gitconfig's `gh auth git-credential` helper can authenticate `git push` to GitHub without an OAuth popup |
 | `/root/.config/glab-cli/` | rw | `glab` CLI's token store. Same reason as `gh`. Sibling paths under `/root/.config/` (VS Code state, other cred helpers, etc.) are NOT bound |
-| `/root/.local/share/uv/` + single files `/root/.local/bin/{uv,uvx}` | rw | uv-managed Python interpreters + tool binaries. Without these binds, a project's `.venv/bin/python` symlink (pointing into `~/.local/share/uv/python/...`) resolves to nothing. See [uv bind discipline](#uv-bind-discipline) |
+| `/root/.local/share/` + single files `/root/.local/bin/{uv,uvx}` | rw | Bulk-bound XDG data dir: host-installed plugins for `helm`, `kubectl`/`krew`, `uv`-managed Python, etc. just work inside the sandbox without per-tool allowlist additions. `applications/` and `claude/` are tmpfs-masked so Claude Code's own writes (URL handler `.desktop`, versioned binary cache) stay ephemeral. `.config/` stays strict-allowlist — credentials live there, not under `.local/share/`. See [XDG split rationale](#xdg-split-rationale) and [uv bind discipline](#uv-bind-discipline) |
 | `/usr/libexec/claude-sandbox/claude` | r | The real Claude binary, relocated here by the installer from `~/.local/bin/claude` so plain `claude` on the user's PATH always resolves to the shadow. The shadow exec's this same file via `bwrap`; a bind back to `~/.local/bin/claude` inside the sandbox keeps Claude Code's `installMethod=native` self-check happy |
 | Network (`--share-net`) | — | Claude needs `api.anthropic.com` + GitHub/GitLab. See [network-identity disclosure](#network-identity-disclosure) |
 
@@ -99,6 +99,50 @@ Practical rule: keep secrets outside the workspace (e.g., in
 `~/.config/` mounted via your devcontainer's `mounts`). Don't put
 `.env` files with production credentials at the workspace root and
 expect them to be invisible.
+
+<details>
+<summary id="xdg-split-rationale">XDG split rationale: data bulk-bound, config strict-allowlist</summary>
+
+The bind-back list splits by XDG category. `$HOME/.config/` keeps the
+strict allowlist (`gh`, `glab-cli` and that's it) because credentials
+live here by XDG contract — `gcloud`, `helm` repo auth, `gh` tokens,
+`oauth2-proxy` cookies, anything secret a tool persists. A new
+credentialed tool that drops files under `$HOME/.config/<newtool>/`
+is masked for free.
+
+`$HOME/.local/share/` and `$HOME/.cache/` go the other way and are
+bulk-bound. These are XDG data/cache locations — plugin trees,
+binary registries, download caches, etc. Bulk-binding them means
+host-installed `helm` plugins, `kubectl`/`krew` plugins, `cargo`
+registry, `npm` global state, `uv`-managed Pythons, and so on are
+visible inside the sandbox without each requiring an allowlist
+addition. The forward-compat bet is on XDG discipline: a tool that
+stores credentials under `~/.local/share/<tool>/` instead of
+`~/.config/<tool>/` would leak. Audit when adding such a tool.
+
+Two sub-dirs under `.local/share/` are tmpfs-masked so Claude Code's
+own runtime writes don't escape into the host:
+
+- `applications/` — Claude Code drops a `.desktop` URL handler here
+  on first launch. Binding the host's dir would register our
+  in-sandbox claude as a URL handler in the host desktop
+  environment.
+- `claude/` — Claude Code's own versioned binary cache, designed to
+  be ephemeral; binding the host's would collide with the host's
+  `claude` install.
+
+`.local/state/` and `.local/bin/` stay tmpfs by default. State is
+transient by XDG contract; `.local/bin/` is appended-not-prepended on
+PATH and selectively binds only `uv`/`uvx`/the real `claude` (see
+[uv bind discipline](#uv-bind-discipline)).
+
+Dotdir credential stores that pre-date XDG (`.ssh`, `.aws`, `.gnupg`,
+`.docker`, `.kube`, `.azure`, etc.) sit directly under `$HOME` and
+are masked by the `--tmpfs $HOME` baseline — the inversion is still
+in effect at the top level; only `.config/`, `.local/share/`, and
+`.cache/` change polarity.
+
+</details>
 
 <details>
 <summary id="uv-bind-discipline">uv bind discipline</summary>
