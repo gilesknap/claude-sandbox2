@@ -143,7 +143,9 @@ assert_contains scenario4a "$ARGV4a" "$TMPHOME/.config/gh"
 # Absent paths must NOT appear.
 assert_not_contains scenario4a "$ARGV4a" "$TMPHOME/.cache"
 assert_not_contains scenario4a "$ARGV4a" "$TMPHOME/.config/glab-cli"
-assert_not_contains scenario4a "$ARGV4a" "$TMPHOME/.local/share/uv"
+assert_not_contains scenario4a "$ARGV4a" "$TMPHOME/.local/share"
+assert_not_contains scenario4a "$ARGV4a" "$TMPHOME/.local/share/applications"
+assert_not_contains scenario4a "$ARGV4a" "$TMPHOME/.local/share/claude"
 assert_not_contains scenario4a "$ARGV4a" "$TMPHOME/.claude.json"
 assert_not_contains scenario4a "$ARGV4a" "$TMPHOME/.local/bin/uv"
 assert_not_contains scenario4a "$ARGV4a" "$TMPHOME/.local/bin/uvx"
@@ -152,7 +154,7 @@ assert_not_contains scenario4a "$ARGV4a" "$TMPHOME/.local/bin/uvx"
 assert_contains scenario4a "$ARGV4a" "$TMPHOME/.local/bin/claude"
 
 # Now populate the full set and re-check.
-mkdir -p "$TMPHOME/.cache" "$TMPHOME/.config/glab-cli" "$TMPHOME/.local/share/uv" "$TMPHOME/.local/bin"
+mkdir -p "$TMPHOME/.cache" "$TMPHOME/.config/glab-cli" "$TMPHOME/.local/share/helm" "$TMPHOME/.local/bin"
 touch "$TMPHOME/.claude.json" "$TMPHOME/.local/bin/uv" "$TMPHOME/.local/bin/uvx" "$TMPHOME/.local/bin/claude"
 # A sibling under .config (e.g. VS Code) must NOT be bound even when
 # present — only the explicit allowlist is exposed.
@@ -164,7 +166,10 @@ assert_contains scenario4b "$ARGV4b" "$TMPHOME/.claude"
 assert_contains scenario4b "$ARGV4b" "$TMPHOME/.cache"
 assert_contains scenario4b "$ARGV4b" "$TMPHOME/.config/gh"
 assert_contains scenario4b "$ARGV4b" "$TMPHOME/.config/glab-cli"
-assert_contains scenario4b "$ARGV4b" "$TMPHOME/.local/share/uv"
+# .local/share is bulk-bound, with applications/ + claude/ tmpfs-masked.
+assert_contains scenario4b "$ARGV4b" "$TMPHOME/.local/share"
+assert_contains scenario4b "$ARGV4b" "$TMPHOME/.local/share/applications"
+assert_contains scenario4b "$ARGV4b" "$TMPHOME/.local/share/claude"
 assert_contains scenario4b "$ARGV4b" "$TMPHOME/.claude.json"
 assert_contains scenario4b "$ARGV4b" "$TMPHOME/.local/bin/uv"
 assert_contains scenario4b "$ARGV4b" "$TMPHOME/.local/bin/uvx"

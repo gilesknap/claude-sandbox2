@@ -92,12 +92,35 @@ bwrap_argv_build() {
     # Single bind-back list. --bind on a missing source would abort
     # bwrap, so each entry is gated on existence. Directories use
     # `-d`, files use `-f`; both flavours map source→dest identically.
+    #
+    # Split-by-XDG-category: $HOME/.config stays strict-allowlist
+    # (credentials live here — gh/glab tokens, gcloud OAuth, etc.) so
+    # forward-compat masking of new credentialed tools still applies.
+    # $HOME/.local/share (XDG data) and $HOME/.cache are bulk-bound:
+    # plugin/state directories for helm, krew/kubectl, uv-managed
+    # Python, etc. just work without per-tool allowlist additions.
+    # Bets on XDG discipline — a tool that drops creds under
+    # ~/.local/share/<tool>/ instead of ~/.config/<tool>/ would leak.
     local rel
-    for rel in .claude .cache .config/gh .config/glab-cli .local/share/uv; do
+    for rel in .claude .cache .config/gh .config/glab-cli; do
         if [ -d "$home/$rel" ]; then
             argv+=( --bind "$home/$rel" "$home/$rel" )
         fi
     done
+    # $HOME/.local/share bulk-bound for host XDG data dirs (helm
+    # plugins, krew, uv Python, etc.). Two sub-dirs need to stay
+    # ephemeral via tmpfs overlays:
+    #   applications/  Claude Code writes a .desktop URL handler
+    #                  here; binding the host's dir would register
+    #                  our in-sandbox claude as a host URL handler.
+    #   claude/        Claude Code's versioned binary cache,
+    #                  ephemeral by design and would collide with
+    #                  the host's claude install.
+    if [ -d "$home/.local/share" ]; then
+        argv+=( --bind "$home/.local/share" "$home/.local/share" )
+        argv+=( --tmpfs "$home/.local/share/applications" )
+        argv+=( --tmpfs "$home/.local/share/claude" )
+    fi
     for rel in .claude.json .local/bin/uv .local/bin/uvx; do
         if [ -f "$home/$rel" ]; then
             argv+=( --bind "$home/$rel" "$home/$rel" )
